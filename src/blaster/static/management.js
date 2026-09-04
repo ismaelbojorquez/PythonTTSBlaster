@@ -1,10 +1,15 @@
+import { stopRecordings } from "./recording-player.js";
+
 "use strict";
-let ctx, tab = "trunks", cache = {}, setup = false, selectedCampaign = null, auditOffset = 0;
+import { loadCountries, countryOptions, applyTemplateAgent } from "./countries.js";
+import { strategyNames } from "./agent-pool.js";
+let ctx, tab = "trunks", cache = {}, setup = false, auditOffset = 0;
 const $ = s => document.querySelector(s);
 const esc = value => ctx.escapeHTML(value);
-const names = {trunks:"Troncales",templates:"Plantillas",schedules:"Programación",automatic:"Reportes automáticos",alerts:"Alertas",config:"Configuración",users:"Usuarios",audit:"Auditoría"};
-const descriptions = {trunks:"Prioridad, distribución y capacidad de cada ruta SIP.",templates:"Mensajes reutilizables con las variables de tus contactos.",schedules:"Una campaña a la vez. Las siguientes esperan turno dentro de su margen de horario.",automatic:"Archivos locales diarios o semanales, disponibles para descargar.",alerts:"Incidencias y reportes que requieren tu atención.",config:"Capacidad global, puertos por troncal, tiempos y conservación.",users:"Define quién administra, opera o consulta la plataforma.",audit:"Acciones de usuarios y tareas automáticas con fecha e identidad."};
+const names = {trunks:"Troncales",templates:"Plantillas",schedules:"Historial de programación",automatic:"Reportes automáticos",alerts:"Alertas",config:"Configuración",users:"Usuarios",audit:"Auditoría"};
+const descriptions = {trunks:"Prioridad, distribución y capacidad de cada ruta SIP.",templates:"Mensajes reutilizables con las variables de tus contactos.",schedules:"Consulta los horarios y cancela los pendientes. Las nuevas programaciones se definen al crear la campaña.",automatic:"Archivos locales diarios o semanales, disponibles para descargar.",alerts:"Incidencias y reportes que requieren tu atención.",config:"Capacidad global, puertos por troncal, tiempos y conservación.",users:"Define quién administra, opera o consulta la plataforma.",audit:"Acciones de usuarios y tareas automáticas con fecha e identidad."};
 const stateNames = {pending:"Pendiente",started:"Iniciada",cancelled:"Cancelada",missed:"Horario vencido",skipped:"Omitida",failed:"Fallida",ready:"Disponible",running:"Generando",expired:"Vencido"};
+const scheduleDetail = row => row.detail || (row.state === "pending" ? "Esperando horario y disponibilidad" : row.state === "cancelled" ? "No se ejecutará en este horario" : "Sin información adicional");
 const zone = () => ctx.state.status?.reporting_timezone || "America/Mexico_City";
 export const formatTimestamp = (value,timeZone) => value ? new Intl.DateTimeFormat("es-MX", {timeZone,dateStyle:"medium",timeStyle:"short"}).format(new Date(value)) : "—";
 const stamp = (value,timeZone=zone()) => formatTimestamp(value,timeZone);
@@ -18,6 +23,10 @@ const select = (key,label,value,options) => `<div class="ops-field"><label for="
 const check = (key,label,value) => `<label class="ops-check"><input type="checkbox" name="${key}" ${value?"checked":""}>${esc(label)}</label>`;
 const buttons = label => `<div class="ops-form-actions"><button type="submit" class="primary">${label}</button>${action("Cancelar edición","ops-refresh")}</div>`;
 function form(kind,title,content,id="") { return `<form class="ops-form" data-manage-form="${kind}" data-id="${esc(id)}"><h2>${title}</h2>${content}</form>`; }
+function templatePoolFields(edit) {
+  const numbers = edit?.agent_numbers_national || (edit?.agent_number ? [edit.agent_national || edit.agent_number] : []);
+  return `<div class="ops-grid">${select("agent_country","País del pool",edit?.agent_country||"MX",countryOptions())}${select("agent_strategy","Distribución",edit?.agent_strategy||"round_robin",Object.entries(strategyNames))}${field("agent_pool_wait","Espera si todos están ocupados (s)",edit?.agent_pool_wait??30,"number",'min="0" max="300" step="1" required')}</div><label for="m-agent_numbers_text">Teléfonos de transferencia (opcional)</label><textarea id="m-agent_numbers_text" name="agent_numbers_text" rows="3" maxlength="4000" spellcheck="false">${esc(numbers.join("\n"))}</textarea><p class="field-help">Un número nacional por línea. Hasta 50 números, con una llamada por teléfono. Usa 0 segundos para no esperar cuando todos estén ocupados.</p>`;
+}
 function cards(items,render,text) { return items.length ? `<div class="ops-records">${items.map(render).join("")}</div>` : empty(text); }
 const record = (title,summary,body,controls="") => `<article class="ops-record"><div class="ops-record-head"><div><h2>${esc(title)}</h2><p>${esc(summary)}</p></div><div class="ops-row-actions">${controls}</div></div>${body}</article>`;
 const values = entries => `<dl class="ops-values">${entries.map(([a,b])=>`<div><dt>${esc(a)}</dt><dd>${esc(b)}</dd></div>`).join("")}</dl>`;
@@ -31,7 +40,27 @@ export function auditPresentation(row) {
     "report.generated":["Reporte automático generado","Reporte","Archivo disponible"],
     "report.download":["Reporte descargado","Reporte","Acceso al archivo"],
     "recording.listen":["Grabación consultada","Llamada","Acceso al audio"],
+    "traceability.report_downloaded":["Reporte de trazabilidad descargado","Identificador","Exportación XLSX"],
+    "traceability.bundle_downloaded":["Paquete de grabaciones descargado","Identificador","Exportación masiva"],
     "schedule.started":["Campaña programada iniciada","Campaña","Iniciada"],
+    "campaign.scheduled":["Campaña creada con horario","Campaña","Programada"],
+    "campaign.started_on_create":["Campaña creada e iniciada","Campaña","Iniciada"],
+    "campaign.duplicated":["Campaña duplicada","Campaña","Borrador independiente creado"],
+    "campaign.retries_updated":["Reintentos configurados","Campaña","Política actualizada"],
+    "call.retry_scheduled":["Reintento programado","Llamada","Próximo intento en espera"],
+    "call.retry_started":["Reintento iniciado","Llamada","Intento registrado"],
+    "call.retry_cancelled":["Reintento cancelado","Llamada","Campaña detenida"],
+    "call.retry_finished":["Fin de reintentos","Llamada","Decisión registrada"],
+    "campaign.created":["Campaña creada","Campaña","Creación registrada"],
+    "campaign.rerun_created":["Nueva ejecución creada","Campaña","Historial anterior conservado"],
+    "campaign.rerun_started":["Campaña ejecutada nuevamente","Campaña","Iniciada"],
+    "campaign.start_requested":["Inicio de campaña solicitado","Campaña","Solicitud registrada"],
+    "campaign.started":["Campaña iniciada","Campaña","Iniciada"],
+    "campaign.capacity_paused":["Marcación pausada por capacidad","Campaña","Pool de transferencia ocupado"],
+    "campaign.capacity_resumed":["Marcación reanudada por capacidad","Campaña","Teléfono de transferencia disponible"],
+    "campaign.start_failed":["Inicio de campaña fallido","Campaña","Consulta el motivo"],
+    "campaign.rerun_rejected":["Reejecución no permitida","Campaña","Consulta el motivo"],
+    "campaign.duplicate_rejected":["Duplicación no permitida","Campaña","Consulta el motivo"],
     "schedule.missed":["Horario de campaña vencido","Campaña","Requiere reprogramación"],
     "schedule.skipped":["Programación omitida","Campaña","Sin contactos pendientes"],
     "schedule.failed":["Error al iniciar campaña programada","Campaña","No iniciada"],
@@ -90,7 +119,7 @@ export function installManagement(context) {
   });
   $("#template-picker").addEventListener("change",()=>{
     const t=cache.templates?.find(t=>t.id===$("#template-picker").value);
-    if(t) { $("#message").value=t.message; if(t.agent_number) $("#agent-number").value=t.agent_number; $("#message-preview").textContent=t.message; }
+    if(t) { $("#message").value=t.message; applyTemplateAgent(t); $("#message-preview").textContent=t.message; }
   });
 }
 export async function bootSession() {
@@ -115,10 +144,11 @@ function showSession() {
   ctx.state.current=null; ctx.state.selected=null; ctx.state.jobs=[];
   ctx.view("dashboard"); applyRole();
 }
-export function expireSession() { ctx.clearAudioPreview(); ctx.state.user=null; cache={}; setup=false; showLogin(); }
+export function expireSession() { stopRecordings(); ctx.clearAudioPreview(); ctx.state.user=null; cache={}; setup=false; showLogin(); }
 export function applyRole() { document.body.dataset.role=ctx.state.user?.role || "guest"; }
 export async function loadTemplates() {
   if(!ctx.state.user) return;
+  await loadCountries(ctx.api);
   cache.templates=await ctx.api("/api/manage/templates");
   const picker=$("#template-picker"),old=picker.value;
   picker.innerHTML='<option value="">Escribir un mensaje nuevo</option>'+cache.templates.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("");
@@ -135,7 +165,6 @@ async function openTab(next=tab) {
     const route={automatic:"report-schedules"}[tab]||tab;
     cache[tab]=await ctx.api(`/api/manage/${route}${tab==="audit"?`?offset=${auditOffset}`:""}`);
     if(tab==="config") cache.configTrunks=(await ctx.api("/api/manage/trunks")).items;
-    if(tab==="schedules") ctx.state.campaigns=await ctx.api("/api/campaigns");
     render();
   } finally { $("#ops-content").setAttribute("aria-busy","false"); }
 }
@@ -147,11 +176,11 @@ function render(edit=null) {
     html+=cards(data.items,t=>record(t.name,`${t.sip.domain||"Destino de simulación"} · ${t.enabled?(t.cooldown_seconds?`En pausa de respaldo · ${t.cooldown_seconds} s`:t.status):"Desactivada"}`,values([["Prioridad",t.priority],["Peso",t.weight],["Canales reservados",`${t.reserved_channels} / ${t.channels}`],["Llamadas / segundo",t.calls_per_second],["Puerto SIP local",t.sip.local_port],["RTP",`${t.sip.rtp_port}–${t.sip.rtp_port+t.sip.rtp_port_range-1}`]]),`${action("Historial","trunk-history",t.id)}${admin()?action("Editar","trunk-edit",t.id):""}`),"Agrega una troncal para habilitar rutas.");
     if(admin()) html+=trunkForm(edit);
   } else if(tab==="templates") {
-    html=cards(cache.templates,t=>record(t.name,t.agent_number?`Agente: ${t.agent_number}`:"Sin agente predeterminado",`<p class="ops-message">${esc(t.message)}</p>`,write()?action("Usar en campaña","template-use",t.id)+action("Editar","template-edit",t.id)+action("Eliminar","template-delete",t.id):""),"Guarda tu primer mensaje para reutilizarlo en las campañas.");
-    if(write()) html+=form("template",edit?"Editar plantilla":"Nueva plantilla",`<div class="ops-grid">${field("name","Nombre",edit?.name||"","text",'required maxlength="100"')}${field("agent_number","Número del agente (opcional)",edit?.agent_number||"","tel")}</div><label for="m-message">Mensaje</label><textarea id="m-message" name="message" rows="4" maxlength="4000" required>${esc(edit?.message||"")}</textarea><p class="field-help">Variables como {nombre} y {fecha}. El menú de opciones se agrega al llamar.</p>${buttons("Guardar plantilla")}`,edit?.id||"");
+    html=cards(cache.templates,t=>record(t.name,t.agent_number?`${t.agent_numbers.length} teléfonos · ${strategyNames[t.agent_strategy]}`:"Sin pool predeterminado",`<p class="ops-message">${esc(t.message)}</p>`,write()?action("Usar en campaña","template-use",t.id)+action("Editar","template-edit",t.id)+action("Eliminar","template-delete",t.id):""),"Guarda tu primer mensaje para reutilizarlo en las campañas.");
+    if(write()) html+=form("template",edit?"Editar plantilla":"Nueva plantilla",`<div class="ops-grid">${field("name","Nombre",edit?.name||"","text",'required maxlength="100"')}</div>${templatePoolFields(edit)}<label for="m-message">Mensaje</label><textarea id="m-message" name="message" rows="4" maxlength="4000" required>${esc(edit?.message||"")}</textarea><p class="field-help">Variables como {nombre} y {fecha}. El menú de opciones se agrega al llamar.</p>${buttons("Guardar plantilla")}`,edit?.id||"");
   } else if(tab==="schedules") {
-    html=cards(cache.schedules,r=>record(r.campaign_name,`${stateNames[r.state]} · ${r.mode==="sip"?"SIP real":"Simulación"}`,values([["Fecha",stamp(r.due_at,r.timezone)],["Zona de programación",r.timezone],["Detalle",r.detail||"Esperando horario y disponibilidad"]]),r.state==="pending"&&write()?action("Cancelar programación","schedule-cancel",r.id):""),"Programa una campaña guardada para que comience en una fecha y hora.");
-    if(write()) html+=form("schedule","Programar campaña",`<div class="ops-grid">${select("campaign_id","Campaña",selectedCampaign||"",[["","Selecciona una campaña"],...ctx.state.campaigns.filter(c=>(c.counts.queued||0)>0&&c.mode===ctx.state.status.mode).map(c=>[c.id,c.name])])}${field("local_at","Fecha y hora","","datetime-local","required")}${field("timezone","Zona horaria",zone(),"text","required")}</div><p class="field-help">El motor debe permanecer abierto. Si está ocupado, la campaña espera dentro del margen configurado; después se marca como vencida.</p>${buttons("Programar llamadas")}`);
+    html=cards(cache.schedules,r=>record(r.campaign_name,`${stateNames[r.state]} · ${r.mode==="sip"?"SIP real":"Simulación"}`,values([["Fecha",stamp(r.due_at,r.timezone)],["Zona de programación",r.timezone],["Detalle",scheduleDetail(r)]]),action("Abrir campaña","select-campaign",r.campaign_id)+(r.state==="pending"&&write()?action("Cancelar programación","schedule-cancel",r.id):"")),"Aún no hay programaciones. Elige Programar al crear una campaña.");
+    if(write()) html+=action("Crear campaña","new");
   } else if(tab==="automatic") {
     html=cards(cache.automatic.schedules,r=>record(r.name,`${r.enabled?"Activa":"Pausada"} · ${r.cadence==="daily"?"Diaria":"Semanal"} · ${r.format.toUpperCase()}`,values([["Próxima ejecución",stamp(r.next_run,r.timezone)],["Zona",r.timezone],["Período",`${r.period_days} días completos anteriores`]]),write()?action("Editar","report-edit",r.id):""),"Programa la generación de archivos Excel o CSV sin repetir la descarga manual.");
     if(write()) html+=reportForm(edit);
@@ -172,8 +201,8 @@ function render(edit=null) {
   $("#ops-content").innerHTML=html; applyRole();
 }
 function trunkForm(t) {
-  const sip=t?.sip||{domain:"",username:"",auth_username:"",caller_id:"",registrar:"",proxy:"",registration_enabled:true,dial_format:"mexico_52",transport:"udp",bind_address:"0.0.0.0",public_address:"",local_port:5060,rtp_port:10000+cache.trunks.items.length*200,rtp_port_range:200};
-  return form("trunk",t?`Editar ${esc(t.name)}`:"Agregar troncal",`<div class="ops-grid">${field("id","Identificador",t?.id||"","text",`required pattern="(?:[a-zA-Z0-9_]|-){1,40}" ${t?"readonly":""}`)}${field("name","Nombre",t?.name||"","text",'required maxlength="100"')}${field("domain","Servidor SIP",sip.domain,"text","required","Host o host:puerto, por ejemplo servidor.example:5060")}${field("username","Usuario SIP",sip.username,"text","required")}${field("password",t?.has_password?"Contraseña (vacío conserva la actual)":"Contraseña","","password",'autocomplete="new-password"')}${field("caller_id","Caller ID",sip.caller_id)}${field("priority","Prioridad",t?.priority??10,"number",'min="0" max="1000" required')}${field("weight","Peso de distribución",t?.weight??1,"number",'min="1" max="100" required')}${field("channels","Canales de esta troncal",t?.channels??10,"number",'min="2" max="60" required')}${field("calls_per_second","Llamadas por segundo",t?.calls_per_second??1,"number",'min="0.01" max="20" step="0.01" required')}${select("transport","Transporte",sip.transport,[["udp","UDP"],["tcp","TCP"]])}${field("local_port","Puerto SIP local",sip.local_port,"number",'min="1024" max="65535" required')}${field("rtp_port","Puerto RTP inicial (par)",sip.rtp_port,"number",'min="1024" max="65000" step="2" required')}${field("rtp_port_range","Cantidad de puertos RTP",sip.rtp_port_range,"number",'min="4" max="4000" required')}${select("dial_format","Formato de marcación",sip.dial_format,[["mexico_52","México · 52 + 10 dígitos"],["as_entered","Como se ingresó"]])}</div>${check("enabled","Troncal habilitada",t?t.enabled:true)}${check("registration_enabled","Requiere registro SIP",sip.registration_enabled)}<details class="ops-advanced"><summary>Autenticación, proxy y direcciones de red</summary><div class="ops-grid">${field("auth_username","Usuario de autenticación",sip.auth_username)}${field("registrar","URI de registro",sip.registrar)}${field("proxy","Proxy SIP",sip.proxy)}${field("bind_address","Dirección local",sip.bind_address,"text","required")}${field("public_address","Dirección pública",sip.public_address)}</div></details><p class="field-help">Se guarda en config.toml. Los parámetros no secretos y su historial también se guardan en la base. Aplica cuando no haya campañas activas.</p>${buttons("Guardar y aplicar troncal")}`,t?.id||"");
+  const sip=t?.sip||{domain:"",username:"",auth_username:"",caller_id:"",registrar:"",proxy:"",registration_enabled:true,dial_format:"as_entered",transport:"udp",bind_address:"0.0.0.0",public_address:"",local_port:5060,rtp_port:10000+cache.trunks.items.length*200,rtp_port_range:200};
+  return form("trunk",t?`Editar ${esc(t.name)}`:"Agregar troncal",`<div class="ops-grid">${field("id","Identificador",t?.id||"","text",`required pattern="(?:[a-zA-Z0-9_]|-){1,40}" ${t?"readonly":""}`)}${field("name","Nombre",t?.name||"","text",'required maxlength="100"')}${field("domain","Servidor SIP",sip.domain,"text","required","Host o host:puerto, por ejemplo servidor.example:5060")}${field("username","Usuario SIP",sip.username,"text","required")}${field("password",t?.has_password?"Contraseña (vacío conserva la actual)":"Contraseña","","password",'autocomplete="new-password"')}${field("caller_id","Caller ID",sip.caller_id)}${field("priority","Prioridad",t?.priority??10,"number",'min="0" max="1000" required')}${field("weight","Peso de distribución",t?.weight??1,"number",'min="1" max="100" required')}${field("channels","Canales de esta troncal",t?.channels??10,"number",'min="2" max="60" required')}${field("calls_per_second","Llamadas por segundo",t?.calls_per_second??1,"number",'min="0.01" max="20" step="0.01" required')}${select("transport","Transporte",sip.transport,[["udp","UDP"],["tcp","TCP"]])}${field("local_port","Puerto SIP local",sip.local_port,"number",'min="1024" max="65535" required')}${field("rtp_port","Puerto RTP inicial (par)",sip.rtp_port,"number",'min="1024" max="65000" step="2" required')}${field("rtp_port_range","Cantidad de puertos RTP",sip.rtp_port_range,"number",'min="4" max="4000" required')}${select("dial_format","Formato de marcación",sip.dial_format,[["as_entered","Internacional · país de la campaña"],["mexico_52","Solo México · 52 + 10 dígitos"]])}</div>${check("enabled","Troncal habilitada",t?t.enabled:true)}${check("registration_enabled","Requiere registro SIP",sip.registration_enabled)}<details class="ops-advanced"><summary>Autenticación, proxy y direcciones de red</summary><div class="ops-grid">${field("auth_username","Usuario de autenticación",sip.auth_username)}${field("registrar","URI de registro",sip.registrar)}${field("proxy","Proxy SIP",sip.proxy)}${field("bind_address","Dirección local",sip.bind_address,"text","required")}${field("public_address","Dirección pública",sip.public_address)}</div></details><p class="field-help">Se guarda en config.toml. Los parámetros no secretos y su historial también se guardan en la base. Aplica cuando no haya campañas activas.</p>${buttons("Guardar y aplicar troncal")}`,t?.id||"");
 }
 function portsForm(trunks) {
   if(!trunks.length) return "";
@@ -203,8 +232,7 @@ async function saveForm(formEl) {
     payload.sip={...trunk.sip,password:""};
     for(const key of ["local_port","rtp_port","rtp_port_range"]) payload.sip[key]=Number(data[key]);
     path="trunks";
-  } else if(kind==="template") { payload={name:data.name,message:data.message,agent_number:data.agent_number}; if(id) payload.id=id; path="templates"; }
-  else if(kind==="schedule") { payload=data; path="schedules"; }
+  } else if(kind==="template") { payload={name:data.name,message:data.message,agent_numbers_text:data.agent_numbers_text,agent_country:data.agent_country,agent_strategy:data.agent_strategy,agent_pool_wait:Number(data.agent_pool_wait)}; if(id) payload.id=id; path="templates"; }
   else if(kind==="report") { payload={...data,weekday:+data.weekday,period_days:+data.period_days,enabled:checked("enabled")}; if(id) payload.id=id; path="report-schedules"; }
   else if(kind==="user") { payload={...data,enabled:checked("enabled")}; path=`users${id?"/"+id:""}`; }
   else if(kind==="config") {
@@ -225,7 +253,6 @@ export async function managementAction(name,el) {
   if(name==="logout") { await ctx.api("/api/auth/logout",{}); expireSession(); return true; }
   if(name==="nav-operations"||name==="ops-refresh") { await openTab(); return true; }
   if(name==="ops-tab") { await openTab(el.dataset.id); return true; }
-  if(name==="schedule-campaign") { selectedCampaign=ctx.state.current; await openTab("schedules"); return true; }
   if(name==="trunk-edit") { render(cache.trunks.items.find(x=>x.id===el.dataset.id)); $("#m-name").focus(); $(".ops-form").scrollIntoView({block:"start"}); return true; }
   if(name==="trunk-history") {
     const rows=await ctx.api(`/api/manage/trunks/${el.dataset.id}/history`);
@@ -238,7 +265,7 @@ export async function managementAction(name,el) {
   if(name==="template-use") {
     ctx.clearAudioPreview();
     const t=cache.templates.find(r=>r.id===el.dataset.id); ctx.view("editor"); await loadTemplates();
-    $("#template-picker").value=t.id; $("#message").value=t.message; $("#agent-number").value=t.agent_number; $("#campaign-name").focus(); return true;
+    $("#template-picker").value=t.id; $("#message").value=t.message; applyTemplateAgent(t); $("#campaign-name").focus(); return true;
   }
   if(name==="template-delete") { if(!confirm("¿Eliminar esta plantilla? Las campañas creadas conservan su mensaje.")) return true; await ctx.api(`/api/manage/templates/${el.dataset.id}/delete`,{}); await openTab(); await loadTemplates(); return true; }
   if(name==="schedule-cancel"||name==="alert-ack") { await ctx.api(`/api/manage/${name==="schedule-cancel"?"schedules":"alerts"}/${el.dataset.id}/${name==="schedule-cancel"?"cancel":"acknowledge"}`,{}); await openTab(); return true; }

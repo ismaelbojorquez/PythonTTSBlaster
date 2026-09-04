@@ -1,3 +1,5 @@
+import { recordingMarkup, stopRecordings } from "./recording-player.js";
+
 const $ = s => document.querySelector(s);
 const number = new Intl.NumberFormat("es-MX");
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
@@ -9,6 +11,7 @@ const actors = {customer:"Cliente", agent:"Agente", system:"Sistema", operator:"
 const amd = {human:"Humano probable", machine:"Buzón probable", unknown:"Incierto", pending:"Sin resultado", disabled:"Desactivado", unmeasured:"Sin medición histórica"};
 const colors = ["#176278", "#39987d", "#ca9134", "#8499ab", "#b86666", "#756996", "#9aab9a", "#b48962", "#446477"];
 let ctx, initialized = false, lastFetch = 0, request = 0, offset = 0, detailId = null, summary = null, downloaded = false;
+let detailOrigin = "calls", detailOriginId = null;
 let query = new URLSearchParams(), charts = new Map();
 const labels = {dashboard:"El pulso de tus llamadas", calls:"Todas las llamadas", reports:"Reportes y exportaciones"};
 
@@ -48,6 +51,7 @@ function currentFilters() {
 }
 async function applyFilters() {
   if ($("#filter-from").value && $("#filter-to").value && $("#filter-from").value > $("#filter-to").value) throw new Error("La fecha inicial debe ser anterior o igual a la final.");
+  stopRecordings();
   query = currentFilters(); offset = 0; detailId = null; lastFetch = 0;
   ctx.notice(); await analyticsRefresh(true);
 }
@@ -66,7 +70,7 @@ export function analyticsView(name) {
   document.querySelectorAll(".primary-nav button").forEach(button => {
     if (button.dataset.action === `nav-${nav}`) button.setAttribute("aria-current","page"); else button.removeAttribute("aria-current");
   });
-  $(".topbar-title").textContent = {dashboard:"Dashboard",campaigns:"Campañas",calls:"Llamadas / CDR",reports:"Reportes",operations:"Operación"}[nav];
+  $(".topbar-title").textContent = {dashboard:"Dashboard",campaigns:"Campañas",calls:"Llamadas / CDR",traceability:"Trazabilidad",reports:"Reportes",operations:"Operación"}[nav];
   document.title = `Blaster · ${$(".topbar-title").textContent}`;
   lastFetch = 0;
 }
@@ -79,7 +83,7 @@ export async function analyticsRefresh(force = false) {
   }
   $("#live-count").textContent = `${ctx.state.status.active_sessions} en curso`;
   const selector = $("#filter-campaign"), old = selector.value;
-  const options = '<option value="">Todas las campañas</option>' + ctx.state.campaigns.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+  const options = '<option value="">Todas las campañas</option>' + ctx.state.campaigns.map(c => `<option value="${esc(c.id)}">${esc(c.name)}${c.lineage?.execution_number > 1 ? ` · Ejecución ${c.lineage.execution_number}` : ""}</option>`).join("");
   if (selector._options !== options) { selector.innerHTML = options; selector._options = options; selector.value = old; }
   if (ctx.state.view === "campaigns") renderCampaignOverview();
   if (!["dashboard","reports","calls"].includes(ctx.state.view)) return;
@@ -179,7 +183,7 @@ function renderCampaignOverview() {
   }
   ctx.setHTML($("#campaign-overview"), `<div class="campaign-list-table">${campaigns.map(c => {
     const done = Object.entries(c.counts).filter(([key]) => ctx.terminal.has(key)).reduce((sum,[,value])=>sum+value,0);
-    return `<article class="campaign-summary-row"><div><button class="table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button><p>${c.mode === "sip" ? "SIP real" : "Simulación"} · Agente ${esc(c.agent_number)}</p></div><div>${ctx.badge(c.status)}</div><div class="campaign-progress"><label>${n(done)} de ${n(c.total)} finalizadas</label><meter min="0" max="${c.total || 1}" value="${done}">${n(done)} de ${n(c.total)}</meter></div><div class="campaign-pending"><strong>${n(c.counts.queued || 0)}</strong><span>pendientes</span></div><button class="secondary" data-action="select-campaign" data-id="${esc(c.id)}">Abrir campaña</button></article>`;
+    return `<article class="campaign-summary-row"><div><button class="table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button><p>${c.mode === "sip" ? "SIP real" : "Simulación"} · Ejecución ${c.lineage?.execution_number || 1} · ${n(c.agent_numbers?.length || 1)} teléfonos de transferencia</p></div><div>${ctx.badge(c.display_status || c.status)}</div><div class="campaign-progress"><label>${n(done)} de ${n(c.total)} finalizadas</label><meter min="0" max="${c.total || 1}" value="${done}">${n(done)} de ${n(c.total)}</meter></div><div class="campaign-pending"><strong>${n(c.counts.queued || 0)}</strong><span>pendientes</span></div><button class="secondary" data-action="select-campaign" data-id="${esc(c.id)}">Abrir campaña</button></article>`;
   }).join("")}</div>`);
 }
 function callQuery() {
@@ -197,21 +201,14 @@ async function fetchCalls() {
   if (version !== request || ctx.state.view !== "calls") return;
   contextLine(result.total);
   $("#cdr-detail").hidden = true; $("#calls-explorer").hidden = false;
-  ctx.setHTML($("#cdr-rows"), result.items.map(row => `<tr><td><time datetime="${esc(row.started_at)}">${esc(time(row.started_at,true))}</time><span class="cell-meta">${esc(row.campaign_name)}</span></td><td><button class="contact-button" data-action="open-cdr" data-id="${esc(row.id)}">${esc(row.contact_name || row.phone)}${row.contact_name ? `<span>${esc(row.phone)}</span>` : ""}<span class="detail-affordance">Ver detalle de llamada</span></button>${row.coverage === "legacy" ? '<span class="cell-meta">Histórico</span>' : ""}</td><td>${ctx.badge(row.status)}</td><td><span class="amd-text ${esc(row.amd_verdict)}">${esc(row.amd_label)}</span></td><td class="numeric">${seconds(row.customer_connected_seconds)}</td><td class="numeric">${seconds(row.bridge_seconds)}</td><td>${esc(actors[row.end_actor] || "Desconocido")}</td></tr>`).join("") || '<tr><td colspan="7" class="table-empty">No hay llamadas con estos filtros. Prueba otro período o resultado.</td></tr>');
+  ctx.setHTML($("#cdr-rows"), result.items.map(row => `<tr><td><time datetime="${esc(row.started_at)}">${esc(time(row.started_at,true))}</time><span class="cell-meta">${esc(row.campaign_name)} · Intento ${n(row.attempt_number || 1)}</span></td><td><button class="contact-button" data-action="open-cdr" data-id="${esc(row.id)}">${esc(row.contact_name || row.phone)}${row.contact_name ? `<span>${esc(row.phone)}</span>` : ""}<span>Credito ${esc(row.credit_id || "Sin crédito histórico")}</span><span class="detail-affordance">Ver detalle de llamada</span></button>${row.coverage === "legacy" ? '<span class="cell-meta">Histórico</span>' : ""}</td><td>${ctx.badge(row.status)}</td><td><span class="amd-text ${esc(row.amd_verdict)}">${esc(row.amd_label)}</span></td><td class="numeric">${seconds(row.customer_connected_seconds)}</td><td class="numeric">${seconds(row.bridge_seconds)}</td><td>${esc(actors[row.end_actor] || "Desconocido")}</td></tr>`).join("") || '<tr><td colspan="7" class="table-empty">No hay llamadas con estos filtros. Prueba otro período o resultado.</td></tr>');
   $("#cdr-page-info").textContent = result.total ? `${n(offset + 1)}–${n(Math.min(offset + limit,result.total))} de ${n(result.total)}` : "0 llamadas";
   $("#cdr-previous").disabled = offset === 0;
   $("#cdr-next").disabled = offset + limit >= result.total;
 }
 
-const eventNames = {route_selected:"Ruta seleccionada",route_failover:"Cambio a respaldo",recording_started:"Grabación iniciada",recording_ready:"Audio comprimido disponible",created:"Tramo creado",invite_sent:"INVITE enviado",response:"Respuesta de la troncal",ringing:"Timbrando",answered:"Llamada contestada",media_ready:"Audio activo",identity:"Identificador SIP asignado",termination:"Inicio de finalización",closed:"Tramo desconectado",dtmf:"Opción de teclado recibida",amd:"Análisis del saludo",tts_ready:"Voz personalizada lista",message_started:"Reproducción iniciada",message_completed:"Reproducción completada",repeat_requested:"Cliente solicita repetición",transfer_requested:"Cliente solicita agente",bridged:"Cliente y agente enlazados",session_end:"Finalización de sesión",finalized:"CDR cerrado",redirect_reported:"Redirección SIP informada",refer_rejected:"Solicitud REFER rechazada"};
-const reasons = {bye:"Cuelgue remoto",cancel:"Cancelación remota",sip_response:"Respuesta SIP final",cleanup:"Limpieza del tramo",session_cleanup:"Final de sesión",campaign_stopped:"Campaña detenida",shutdown:"Aplicación cerrada",process_interrupted:"Proceso interrumpido",disconnected:"Desconexión sin iniciador identificado",machine:"Buzón probable",amd_unknown:"AMD incierto",no_answer:"Tiempo de timbrado agotado",no_input:"No seleccionó una opción",completed:"Flujo finalizado",failed:"Error en el flujo",agent_timeout:"Tiempo de espera del agente agotado"};
-function recordingMarkup(result) {
-  const r = result.recording;
-  if (!r) return '<p class="chart-footnote">Sin grabación: no se registró evidencia de voz humana o la captura estaba desactivada.</p>';
-  const status = {recording:"Grabando",encoding:"Comprimiendo",ready:"Lista",expired:"Venció la conservación",failed:"No disponible"}[r.status] || r.status;
-  const allowed = ctx.state.user?.role !== "analyst";
-  return `<section class="recording-panel"><div><h2>Grabación · ${esc(status)}</h2><p>${r.evidence === "amd_human_probable" ? "Desde la detección de humano probable" : "Desde la interacción del teclado"}${result.mode === "simulation" ? " · audio sintético de simulación" : ""} · Ogg Opus${r.size_bytes ? ` · ${(r.size_bytes/1024).toFixed(0)} KB` : ""}</p></div>${r.status === "ready" && allowed ? `<audio controls preload="none" src="/api/recordings/${encodeURIComponent(result.id)}" aria-label="Grabación de la llamada"></audio><a class="text-link" download href="/api/recordings/${encodeURIComponent(result.id)}">Descargar audio</a>` : `<p>${esc(r.detail || (allowed ? "" : "Tu rol no permite escuchar grabaciones."))}</p>`}</section>`;
-}
+const eventNames = {agent_pool_waiting:"Espera de teléfono libre",agent_pool_timeout:"Espera de pool agotada",agent_selected:"Teléfono de transferencia seleccionado",route_selected:"Ruta seleccionada",route_failover:"Cambio a respaldo",recording_started:"Grabación iniciada",recording_ready:"Audio comprimido disponible",created:"Tramo creado",invite_sent:"INVITE enviado",response:"Respuesta de la troncal",ringing:"Timbrando",answered:"Llamada contestada",media_ready:"Audio activo",identity:"Identificador SIP asignado",termination:"Inicio de finalización",closed:"Tramo desconectado",dtmf:"Opción de teclado recibida",amd:"Análisis del saludo",tts_ready:"Voz personalizada lista",message_started:"Reproducción iniciada",message_completed:"Reproducción completada",repeat_requested:"Cliente solicita repetición",transfer_requested:"Cliente solicita agente",bridged:"Cliente y agente enlazados",session_end:"Finalización de sesión",finalized:"CDR cerrado",redirect_reported:"Redirección SIP informada",refer_rejected:"Solicitud REFER rechazada"};
+const reasons = {bye:"Cuelgue remoto",cancel:"Cancelación remota",sip_response:"Respuesta SIP final",cleanup:"Limpieza del tramo",session_cleanup:"Final de sesión",campaign_stopped:"Campaña detenida",shutdown:"Aplicación cerrada",process_interrupted:"Proceso interrumpido",disconnected:"Desconexión sin iniciador identificado",machine:"Buzón probable",amd_unknown:"AMD incierto",no_answer:"Tiempo de timbrado agotado",no_input:"No seleccionó una opción",completed:"Flujo finalizado",failed:"Error en el flujo",temporary_error:"Fallo temporal de la troncal",agent_timeout:"Tiempo de espera del agente agotado"};
 async function openDetail(id, focus = true) {
   detailId = id;
   const result = await ctx.api(`/api/calls/${encodeURIComponent(id)}`);
@@ -235,7 +232,8 @@ async function openDetail(id, focus = true) {
   const active = ctx.state.status.sessions.some(s=>s.id === id);
   const canChoose = ["playing","menu"].includes(result.status);
   const keypad = ctx.state.status.mode === "simulation" && active ? `<section class="detail-simulation"><h2>Probar esta llamada</h2><div class="report-actions"><button class="secondary" data-action="cdr-digit" data-value="1" ${canChoose ? "" : "disabled"}>1 · Repetir</button><button class="secondary" data-action="cdr-digit" data-value="2" ${canChoose ? "" : "disabled"}>2 · Agente</button><button class="danger-quiet" data-action="cdr-digit" data-value="hangup">Cliente cuelga</button>${result.agent_id ? '<button class="danger-quiet" data-action="cdr-digit" data-value="agent_hangup">Agente cuelga</button>' : ""}</div></section>` : "";
-  ctx.setHTML($("#cdr-detail"), `<button class="text-link back-link" data-action="back-calls">Volver a las llamadas</button><div class="section-heading"><div><h2 class="detail-title">${esc(result.contact_name || result.phone)}</h2><p>${esc(result.phone)} · ${esc(result.campaign_name)}</p></div>${ctx.badge(result.status)}</div>${result.coverage === "legacy" ? '<p class="coverage-note">Registro histórico. Sólo se dispone de los estados operativos guardados antes de incorporar la telemetría.</p>' : ""}<div class="detail-kpis"><div><span>Respuesta del cliente</span><strong>${result.customer_answered_at ? esc(time(result.customer_answered_at)) : "Sin evidencia"}</strong><small>${esc(result.amd_label)}</small></div><div><span>Conectado</span><strong>${seconds(result.customer_connected_seconds)}</strong><small>Tramo del cliente</small></div><div><span>Con agente</span><strong>${seconds(result.bridge_seconds)}</strong><small>${result.transfer_requested_at ? "Solicitado por el cliente · opción 2" : "Sin solicitud observada"}</small></div><div><span>Finalizó la sesión</span><strong>${esc(actors[result.end_actor])}</strong><small>${esc(reasons[result.end_reason] || result.end_reason || "Sin evidencia")}</small></div></div>${keypad}${recordingMarkup(result)}<section class="chart-panel detail-legs"><h2>Tramos de la llamada</h2><div class="table-scroll">${legRows.length ? table(["Tramo","Número","Troncal","INVITE","Timbrado","Respuesta","Desconexión","Conectado","Finalizó","SIP"],legRows) : '<p class="no-measurements">No se guardaron tramos para este registro.</p>'}</div><p class="chart-footnote">${esc(time(result.started_at,true))} · ${esc(ctx.state.status.reporting_timezone)}. La identidad real o un desvío interno de la troncal pueden no ser observables.</p></section><div class="detail-bottom"><section class="chart-panel"><h2>Recorrido de la llamada</h2><ol class="call-timeline">${history || '<li>Sin eventos detallados disponibles.</li>'}</ol><details class="history-details"><summary>Ver estados operativos (${result.history.length})</summary><ol class="event-list">${result.history.map(e=>`<li><strong>${esc(ctx.labels[e.status] || e.status)}</strong> · ${esc(e.detail)}<time>${esc(time(e.created_at,true))}</time></li>`).join("")}</ol></details></section><aside class="evidence-panel"><h2>Evidencia y mediciones</h2><dl><dt>ID de llamada</dt><dd>${esc(result.id)}</dd><dt>Cobertura</dt><dd>${result.coverage === "legacy" ? "Histórica, sin telemetría" : "Telemetría de esta versión"}</dd><dt>Clasificación AMD</dt><dd>${esc(result.amd_label)}${result.amd_reason ? ` · ${esc(result.amd_reason)}` : ""}</dd><dt>Tiempo de análisis</dt><dd>${result.amd_elapsed_ms == null ? "—" : seconds(result.amd_elapsed_ms/1000)}</dd><dt>Generación TTS</dt><dd>${result.tts_ms == null ? "—" : seconds(result.tts_ms/1000)}</dd><dt>Repeticiones</dt><dd>${n(result.replays)}</dd><dt>Evidencia de finalización</dt><dd>${esc(result.end_evidence || "Desconocida")}</dd>${result.legs.map(leg=>`<dt>Call-ID ${leg.role.startsWith("customer") ? "cliente" : "agente"}</dt><dd>${esc(leg.call_id || "No disponible")}</dd>`).join("")}<dt>Resultado operativo</dt><dd>${esc(result.detail)}</dd></dl></aside></div>`);
+  const backLabel = detailOrigin === "traceability" ? "Volver a trazabilidad" : "Volver a las llamadas";
+  ctx.setHTML($("#cdr-detail"), `<button class="text-link back-link" data-action="back-calls">${backLabel}</button><div class="section-heading"><div><h2 class="detail-title">${esc(result.contact_name || result.phone)}</h2><p>${esc(result.phone)} · Credito ${esc(result.credit_id || "Sin crédito histórico")} · ${esc(result.campaign_name)} · Intento ${n(result.attempt_number || 1)}</p></div>${ctx.badge(result.status)}</div>${result.coverage === "legacy" ? '<p class="coverage-note">Registro histórico. Sólo se dispone de los estados operativos guardados antes de incorporar la telemetría.</p>' : ""}<div class="detail-kpis"><div><span>Respuesta del cliente</span><strong>${result.customer_answered_at ? esc(time(result.customer_answered_at)) : "Sin evidencia"}</strong><small>${esc(result.amd_label)}</small></div><div><span>Conectado</span><strong>${seconds(result.customer_connected_seconds)}</strong><small>Tramo del cliente</small></div><div><span>Con agente</span><strong>${seconds(result.bridge_seconds)}</strong><small>${result.transfer_requested_at ? "Solicitado por el cliente · opción 2" : "Sin solicitud observada"}</small></div><div><span>Finalizó la sesión</span><strong>${esc(actors[result.end_actor])}</strong><small>${esc(reasons[result.end_reason] || result.end_reason || "Sin evidencia")}</small></div></div>${keypad}${recordingMarkup(result, ctx.state.user?.role)}<section class="chart-panel detail-legs"><h2>Tramos de la llamada</h2><div class="table-scroll">${legRows.length ? table(["Tramo","Número","Troncal","INVITE","Timbrado","Respuesta","Desconexión","Conectado","Finalizó","SIP"],legRows) : '<p class="no-measurements">No se guardaron tramos para este registro.</p>'}</div><p class="chart-footnote">${esc(time(result.started_at,true))} · ${esc(ctx.state.status.reporting_timezone)}. La identidad real o un desvío interno de la troncal pueden no ser observables.</p></section><div class="detail-bottom"><section class="chart-panel"><h2>Recorrido de la llamada</h2><ol class="call-timeline">${history || '<li>Sin eventos detallados disponibles.</li>'}</ol><details class="history-details"><summary>Ver estados operativos (${result.history.length})</summary><ol class="event-list">${result.history.map(e=>`<li><strong>${esc(ctx.labels[e.status] || e.status)}</strong> · ${esc(e.detail)}<time>${esc(time(e.created_at,true))}</time></li>`).join("")}</ol></details></section><aside class="evidence-panel"><h2>Evidencia y mediciones</h2><dl><dt>Credito</dt><dd>${esc(result.credit_id || "Sin crédito histórico")}</dd><dt>ID de llamada</dt><dd>${esc(result.id)}</dd><dt>ID de contacto en campaña</dt><dd>${esc(result.contact_id)}</dd><dt>Intento anterior</dt><dd>${result.retry_of ? `<button class="text-link" data-action="open-cdr" data-id="${esc(result.retry_of)}">Ver CDR del intento anterior</button>` : "Primera llamada"}</dd><dt>Cobertura</dt><dd>${result.coverage === "legacy" ? "Histórica, sin telemetría" : "Telemetría de esta versión"}</dd><dt>Clasificación AMD</dt><dd>${esc(result.amd_label)}${result.amd_reason ? ` · ${esc(result.amd_reason)}` : ""}</dd><dt>Tiempo de análisis</dt><dd>${result.amd_elapsed_ms == null ? "—" : seconds(result.amd_elapsed_ms/1000)}</dd><dt>Generación TTS</dt><dd>${result.tts_ms == null ? "—" : seconds(result.tts_ms/1000)}</dd><dt>Repeticiones</dt><dd>${n(result.replays)}</dd><dt>Evidencia de finalización</dt><dd>${esc(result.end_evidence || "Desconocida")}</dd>${result.legs.map(leg=>`<dt>Call-ID ${leg.role.startsWith("customer") ? "cliente" : "agente"}</dt><dd>${esc(leg.call_id || "No disponible")}</dd>`).join("")}<dt>Resultado operativo</dt><dd>${esc(result.detail)}</dd></dl></aside></div>`);
   if (focus) { $("#cdr-detail").focus({preventScroll:true}); $("#cdr-detail").scrollIntoView({block:"start"}); }
 }
 
@@ -258,15 +256,31 @@ async function download(format) {
 }
 
 export async function analyticsAction(name, element) {
-  if (name.startsWith("nav-")) {
-    ++request; detailId = null; ctx.view(name.slice(4)); await analyticsRefresh(true); return true;
+  if (["nav-dashboard","nav-campaigns","nav-calls","nav-reports","nav-operations"].includes(name)) {
+    ++request; detailId = null; detailOrigin = "calls"; detailOriginId = null;
+    ctx.view(name.slice(4)); await analyticsRefresh(true); return true;
   }
   if (name === "outcome-filter") {
     $("#call-status-filter").value = element.dataset.status; $("#call-search").value = "";
     detailId = null; offset = 0; ctx.view("calls"); await fetchCalls(); return true;
   }
-  if (name === "open-cdr") { ctx.view("calls"); await openDetail(element.dataset.id); return true; }
-  if (name === "back-calls") { detailId = null; await fetchCalls(); $("#call-search").focus(); return true; }
+  if (name === "open-cdr") {
+    if (ctx.state.view !== "calls") {
+      detailOrigin = element.dataset.origin || "calls";
+      detailOriginId = element.dataset.id;
+    }
+    ctx.view("calls"); await openDetail(element.dataset.id); return true;
+  }
+  if (name === "back-calls") {
+    stopRecordings(); detailId = null;
+    if (detailOrigin === "traceability") {
+      const originId = detailOriginId;
+      ctx.view("traceability");
+      document.dispatchEvent(new CustomEvent("traceability:restore", {detail:{id:originId}}));
+      return true;
+    }
+    await fetchCalls(); $("#call-search").focus(); return true;
+  }
   if (name === "cdr-previous" || name === "cdr-next") { offset = Math.max(0,offset+(name === "cdr-next" ? pageSize() : -pageSize())); await fetchCalls(); return true; }
   if (name === "cdr-digit") { await ctx.api(`/api/jobs/${detailId}/simulate`, {action:element.dataset.value}); await ctx.refresh(); await openDetail(detailId,false); return true; }
   if (name === "download-xlsx" || name === "download-csv") { await download(name.slice(9)); return true; }

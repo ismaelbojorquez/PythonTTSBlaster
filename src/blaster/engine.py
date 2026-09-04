@@ -9,7 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from blaster.amd import detect
+from blaster.agent_pool import AgentPool
+from blaster.amd import DETECTOR_VERSION, detect
 from blaster.config import Settings
 from blaster.diagnostics import error_detail
 from blaster.dialing import DialingError, format_dial_number
@@ -48,6 +49,7 @@ class Engine:
         self.next_dial = 0.0
         self.dial_lock = asyncio.Lock()
         self.wakeup = asyncio.Event()
+        self.origination_pause: dict | None = None
         self.closing = False
         self.tone = settings.data_dir / "waiting.wav"
         self.work_dir = settings.data_dir / "audio"
@@ -56,6 +58,7 @@ class Engine:
         self.ops = Operations(store)
         self.router = TrunkRouter(settings, self.ops, telephony)
         self.recordings = Recordings(settings, self.ops, telephony)
+        self.agent_pool = AgentPool(store, self.wakeup.set)
 
     def _track_leg(self, leg):
         session = self.dialing_session
@@ -90,6 +93,7 @@ class Engine:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self.telephony.stop()
+        await self.agent_pool.close()
 
     def configure_concurrency(self, value: int) -> None:
         if not 1 <= value <= min(30, self.settings.trunk_channels // 2):
@@ -97,32 +101,44 @@ class Engine:
         self.settings.concurrency = value
         self.wakeup.set()
 
-    def start_campaign(self, cid: str) -> None:
-        campaign = self.store.campaign(cid)
+    def ensure_startable(self, cid: str | None = None) -> None:
         if self.router.reloading:
             raise ValueError("El motor está aplicando la configuración")
-        if campaign["mode"] != self.settings.mode:
-            raise ValueError(
-                "Crea una campaña en este modo; las campañas de simulación están aisladas"
-            )
         if not self.telephony.available or not any(
             self.router.ready(t) for t in self.router.profiles
         ):
             raise ValueError("La troncal no está lista. Revisa su registro antes de iniciar")
         if self.active_campaign and self.active_campaign != cid:
             raise ValueError("Termina o detén la campaña actual antes de iniciar otra")
-        if campaign["status"] == "running":
-            return
-        if not self.store.next_queued(cid):
-            raise ValueError("Esta campaña ya no tiene contactos pendientes")
+
+    def validate_destinations(self, agents, contacts) -> None:
         if self.settings.mode == "sip":
             for trunk in self.router.profiles.values():
                 if trunk.enabled:
-                    format_dial_number(campaign["agent_number"], trunk.sip.dial_format)
-                    for number in self.store.queued_numbers(cid):
+                    for number in (*agents, *contacts):
                         format_dial_number(number, trunk.sip.dial_format)
-        self.active_campaign = cid
+
+    def start_campaign(self, cid: str) -> None:
+        campaign = self.store.campaign(cid)
+        if campaign["mode"] != self.settings.mode:
+            raise ValueError(
+                "Crea una campaña en este modo; las campañas de simulación están aisladas"
+            )
+        self.ensure_startable(cid)
+        if campaign["status"] == "running":
+            return
+        missing = self.store.missing_identifiers(cid)
+        if missing:
+            raise ValueError(
+                f"La campaña tiene {missing} contacto(s) sin Credito o Telefono. "
+                "Crea una campaña nueva con ambos identificadores"
+            )
+        self.store.retries.reconcile(cid)
+        if not self.store.has_queued(cid):
+            raise ValueError("Esta campaña ya no tiene contactos pendientes")
+        self.validate_destinations(campaign["agent_numbers"], self.store.queued_numbers(cid))
         self.store.set_campaign_status(cid, "running")
+        self.active_campaign = cid
         self.wakeup.set()
 
     def pause_campaign(self, cid: str) -> None:
@@ -172,8 +188,28 @@ class Engine:
         while True:
             self.wakeup.clear()
             cid = self.active_campaign
-            if cid and self.store.campaign(cid)["status"] == "running" and self.telephony.available:
+            campaign = self.store.campaign(cid) if cid else None
+            running = bool(campaign and campaign["status"] == "running")
+            queued = bool(running and self.store.has_queued(cid))
+            if running and not queued and not self.sessions:
+                self.store.set_campaign_status(cid, "completed")
+                self.active_campaign = None
+                self.origination_pause = None
+                continue
+            availability = (
+                self.agent_pool.availability(campaign["agent_numbers"])
+                if running
+                else None
+            )
+            if not running or not queued:
+                self.origination_pause = None
+            elif not availability["free"]:
+                self._pause_for_agent_capacity(cid, availability)
+            else:
+                self._resume_after_agent_capacity(availability)
+            if running and queued and self.telephony.available and availability["free"]:
                 if len(self.sessions) < self.settings.concurrency:
+                    self.store.retries.reconcile(cid)
                     job = self.store.next_queued(cid)
                     tid = self.router.reserve(job["id"]) if job else None
                     if job and tid:
@@ -181,13 +217,51 @@ class Engine:
                         session.trace = CallTrace(self.store, job["id"], self.settings.amd.enabled)
                         self.sessions[job["id"]] = session
                         self._state(session, "dialing", "Preparando llamada")
+                        if job["attempt_number"] > 1:
+                            self.ops.audit({}, "call.retry_started", job["id"], {
+                                "campaign_id": cid, "contact_id": job["contact_id"],
+                                "credit_id": job["credit_id"], "phone": job["phone"],
+                                "attempt_number": job["attempt_number"],
+                                "previous_job_id": job["retry_of"],
+                            })
                         session.task = asyncio.create_task(self._run_session(session))
                         continue
-                    if not job and not self.sessions:
-                        self.store.set_campaign_status(cid, "completed")
-                        self.active_campaign = None
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.wakeup.wait(), 0.25)
+
+    def _pause_for_agent_capacity(self, cid: str, availability: dict) -> None:
+        if self.origination_pause and self.origination_pause["campaign_id"] == cid:
+            return
+        self.origination_pause = {
+            "campaign_id": cid,
+            "reason": "agent_pool_full",
+            "busy": availability["busy"],
+            "total": availability["total"],
+        }
+        self.ops.audit({}, "campaign.capacity_paused", cid, self.origination_pause)
+        log.info(
+            "Originación pausada: pool de transferencia ocupado (%s/%s); campaña=%s",
+            availability["busy"],
+            availability["total"],
+            cid,
+        )
+
+    def _resume_after_agent_capacity(self, availability: dict | None) -> None:
+        previous = self.origination_pause
+        if not previous:
+            return
+        detail = {
+            "reason": previous["reason"],
+            "free": len(availability["free"]) if availability else 0,
+            "total": availability["total"] if availability else previous["total"],
+        }
+        self.origination_pause = None
+        self.ops.audit({}, "campaign.capacity_resumed", previous["campaign_id"], detail)
+        log.info(
+            "Originación reanudada: hay %s teléfono(s) de transferencia libre(s); campaña=%s",
+            detail["free"],
+            previous["campaign_id"],
+        )
 
     def _state(self, session: Session, state: str, detail: str = "") -> None:
         if session.trace and state in TERMINAL:
@@ -245,7 +319,9 @@ class Engine:
                     self._state(session, "completed", "La persona terminó la llamada")
             else:
                 status = "busy" if error.code in {486, 600} else "failed"
-                if error.code in {408, 480}:
+                if error.code in {500, 502, 503, 504}:
+                    status = "temporary_error"
+                elif error.code in {408, 480}:
                     status = "no_answer"
                 self._state(session, status, error.detail)
         except DialingError as error:
@@ -259,6 +335,7 @@ class Engine:
                 "synthesizing": "generar la voz y reproducir la espera",
                 "playing": "reproducir el mensaje",
                 "agent_dialing": "conectar con el agente",
+                "agent_waiting": "esperar un teléfono de transferencia disponible",
                 "bridged": "mantener la conversación",
             }.get(session.state, "procesar la llamada")
             cause = error_detail(error)
@@ -281,10 +358,16 @@ class Engine:
             for leg in session.legs:
                 if not leg.closed.is_set():
                     leg.end_by("system", "session_cleanup", "local_command")
-            await asyncio.gather(*(leg.hangup() for leg in session.legs), return_exceptions=True)
+            try:
+                await asyncio.gather(
+                    *(leg.hangup() for leg in session.legs), return_exceptions=True
+                )
+            finally:
+                self.agent_pool.release_after_close(session.job["id"], session.agent)
             await self.recordings.finish(session)
             if session.trace:
                 session.trace.finish()
+                self.store.retries.plan(session.job["id"])
         finally:
             self.router.release(session.job["id"])
             shutil.rmtree(directory, ignore_errors=True)
@@ -349,7 +432,8 @@ class Engine:
                 session.trunk_id = replacement
         if self.settings.amd.enabled:
             self._state(session, "detecting", "Analizando el saludo antes de reproducir el mensaje")
-            result = await detect(customer, self.settings.amd)
+            amd_settings = self.settings.amd.model_copy(deep=True)
+            result = await detect(customer, amd_settings)
             self.store.update_call(
                 session.job["id"],
                 amd_verdict=result.verdict,
@@ -360,7 +444,9 @@ class Engine:
                 amd_words=result.words,
             )
             session.trace.event(
-                "amd", verdict=result.verdict, reason=result.reason, elapsed_ms=result.elapsed_ms
+                "amd", verdict=result.verdict, reason=result.reason, elapsed_ms=result.elapsed_ms,
+                audio_ms=result.audio_ms, voiced_ms=result.voiced_ms, words=result.words,
+                detector_version=DETECTOR_VERSION, parameters=amd_settings.model_dump(),
             )
             log.info("%s; trabajo=%s", result.detail, session.job["id"])
             if result.verdict == "machine":
@@ -368,11 +454,13 @@ class Engine:
                     session, "machine", f"{result.detail}; se cuelga sin reproducir el mensaje"
                 )
                 return
-            if result.verdict == "unknown" and self.settings.amd.unknown_action == "hangup":
+            if result.verdict == "unknown" and amd_settings.unknown_action == "hangup":
                 self._state(session, "amd_unknown", f"{result.detail}; se cuelga por configuración")
                 return
             if result.verdict == "human":
                 await self.recordings.start(session, "amd_human_probable")
+            elif result.verdict == "unknown":
+                await self.recordings.start(session, "amd_inconclusive_continued")
             suffix = "; se continúa por configuración" if result.verdict == "unknown" else ""
             self._state(session, "detecting", result.detail + suffix)
         self._state(session, "synthesizing", "Generando voz personalizada en este equipo")
@@ -458,15 +546,61 @@ class Engine:
 
     async def _agent(self, session: Session, directory: Path) -> None:
         customer = session.customer
+        campaign = self.store.campaign(session.job["campaign_id"])
         if session.agent_requested_at is None:
             session.agent_requested_at = time.monotonic()
         self._state(session, "agent_dialing", "Opción 2 recibida; preparando llamada al agente")
         tone = asyncio.create_task(customer.play(self.tone, loop=True))
+        pool_timeout = False
+
+        def waiting():
+            self._state(
+                session, "agent_waiting", "Todos los teléfonos están ocupados; esperando turno"
+            )
+            session.trace.event("agent_pool_waiting", timeout_seconds=campaign["agent_pool_wait"])
 
         async def dial_and_answer():
+            nonlocal pool_timeout
             if customer.closed.is_set():
                 raise CallEnded(customer.code)
-            number = self.store.campaign(session.job["campaign_id"])["agent_number"]
+            started_wait = time.monotonic()
+            dial_format = self.router.profiles[session.trunk_id].sip.dial_format
+            numbers = list(
+                dict.fromkeys(format_dial_number(n, dial_format) for n in campaign["agent_numbers"])
+            )
+            try:
+                number = await self.agent_pool.acquire(
+                    session.job["id"],
+                    campaign["id"],
+                    numbers,
+                    campaign["agent_strategy"],
+                    campaign["agent_pool_wait"],
+                    waiting,
+                    aliases={
+                        format_dial_number(n, dial_format): n for n in campaign["agent_numbers"]
+                    },
+                )
+            finally:
+                waited = time.monotonic() - started_wait
+                self.store.update_call(
+                    session.job["id"],
+                    agent_pool_wait_seconds=waited,
+                    agent_strategy=campaign["agent_strategy"],
+                )
+            if number is None:
+                pool_timeout = True
+                session.trace.event("agent_pool_timeout", waited_seconds=waited)
+                raise TimeoutError
+            self.store.update_call(session.job["id"], agent_selected_number=number)
+            session.trace.event(
+                "agent_selected",
+                number=number,
+                strategy=campaign["agent_strategy"],
+                waited_seconds=waited,
+            )
+            self._state(session, "agent_dialing", f"Marcando teléfono de transferencia {number}")
+            if customer.closed.is_set():
+                raise CallEnded(customer.code)
             started = time.monotonic()
             session.agent = await self._dial(number, "agent", session)
             elapsed = time.monotonic() - session.agent_requested_at
@@ -516,14 +650,21 @@ class Engine:
                 if not session.agent.closed.is_set():
                     session.agent.end_by("system", "agent_timeout", "local_policy")
                 await session.agent.hangup()
+                self.agent_pool.release_after_close(session.job["id"], session.agent)
             self._state(session, "synthesizing", "Preparando aviso de agente no disponible")
             path = await self._speech_while_connected(
                 customer,
-                "En este momento el agente no está disponible. Gracias por tu tiempo.",
+                "En este momento no hay un agente disponible. Gracias por tu tiempo.",
                 directory / "unavailable.wav",
             )
             await first(customer.closed.wait(), customer.play(path))
-            self._state(session, "failed", "El agente estaba ocupado o no contestó")
+            self._state(
+                session,
+                "failed",
+                "Se agotó la espera del pool de agentes"
+                if pool_timeout
+                else "El agente estaba ocupado o no contestó",
+            )
             return
         if customer.closed.is_set():
             raise CallEnded(customer.code)
@@ -551,11 +692,16 @@ class Engine:
         log.info("%s; trabajo=%s", detail, session.job["id"])
 
     def snapshot(self) -> dict:
+        campaign = self.store.campaign(self.active_campaign) if self.active_campaign else None
+        availability = self.agent_pool.availability(campaign["agent_numbers"]) if campaign else {
+            "total": 0, "busy": 0, "free": []
+        }
         return {
             "trunks": self.router.snapshot(),
             "mode": self.settings.mode,
             "trunk_status": self.telephony.status,
             "ready": self.telephony.available,
+            "automation_enabled": self.settings.automation.enabled,
             "amd_enabled": self.settings.amd.enabled,
             "amd_unknown_action": self.settings.amd.unknown_action,
             "concurrency": self.settings.concurrency,
@@ -568,5 +714,24 @@ class Engine:
             ),
             "reserved_channels": len(self.sessions) * 2,
             "active_campaign": self.active_campaign,
+            "origination_paused": self.origination_pause is not None,
+            "origination_pause_reason": (
+                self.origination_pause["reason"] if self.origination_pause else None
+            ),
             "sessions": [{"id": jid, "state": s.state} for jid, s in self.sessions.items()],
+            "agent_pool": {
+                "total": availability["total"],
+                "busy": availability["busy"],
+                "free": len(availability["free"]),
+                "waiting": list(self.agent_pool.pending),
+                "reservations": [
+                    {
+                        "number": n,
+                        "configured_number": self.agent_pool.aliases.get(n, n),
+                        "job_id": jid,
+                        "state": self.sessions[jid].state if jid in self.sessions else "closing",
+                    }
+                    for n, jid in self.agent_pool.busy.items()
+                ],
+            },
         }

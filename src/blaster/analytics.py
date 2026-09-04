@@ -20,6 +20,7 @@ STATUS_LABELS = {
     "no_input": "Sin selección",
     "busy": "Ocupada",
     "failed": "Fallida",
+    "temporary_error": "Fallo temporal de la troncal",
     "cancelled": "Cancelada",
     "interrupted": "Interrumpida",
     "dialing": "Marcando",
@@ -28,6 +29,7 @@ STATUS_LABELS = {
     "playing": "Reproduciendo",
     "menu": "Esperando opción",
     "agent_dialing": "Marcando agente",
+    "agent_waiting": "Esperando agente libre",
     "bridged": "Con agente",
     "queued": "Pendiente",
 }
@@ -58,6 +60,8 @@ class Filters:
     status: str | None = None
     search: str = ""
     timezone: str = "America/Mexico_City"
+    credit_id: str | None = None
+    phone: str | None = None
 
     def where(self):
         parts, values = ["j.started_at IS NOT NULL"], []
@@ -81,11 +85,17 @@ class Filters:
             values.append(self.status)
         if self.search:
             parts.append(
-                "(j.phone LIKE ? ESCAPE '\\' OR j.id=? OR "
+                "(j.phone LIKE ? ESCAPE '\\' OR j.credit_id LIKE ? ESCAPE '\\' OR j.id=? OR "
                 "json_extract(j.variables,'$.nombre') LIKE ? ESCAPE '\\')"
             )
             term = self.search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            values.extend((f"%{term}%", self.search, f"%{term}%"))
+            values.extend((f"%{term}%", f"%{term}%", self.search, f"%{term}%"))
+        if self.credit_id is not None:
+            parts.append("j.credit_id=?")
+            values.append(self.credit_id)
+        if self.phone is not None:
+            parts.append("j.phone=?")
+            values.append(self.phone)
         return " AND ".join(parts), values
 
 
@@ -133,8 +143,15 @@ RECORD_FIELDS = (
     "processing_seconds",
 )
 SELECT = (
-    "SELECT j.id,j.campaign_id,j.phone,j.status,j.detail,j.started_at,j.ended_at,"
-    "j.variables,c.name AS campaign_name,c.mode,c.agent_number,r.version AS telemetry_version,"
+    "SELECT j.id,j.campaign_id,j.phone,j.credit_id,j.status,j.detail,j.started_at,j.ended_at,"
+    "j.variables,j.message,j.contact_id,j.attempt_number,j.retry_of,j.available_at,"
+    "c.name AS campaign_name,c.mode,"
+    "COALESCE(al.number,r.agent_selected_number,"
+    "CASE WHEN r.version IS NULL THEN c.agent_number END) AS agent_number,"
+    "r.agent_strategy,r.agent_pool_wait_seconds,r.version AS telemetry_version,"
+    "rec.status AS recording_status,rec.filename AS recording_filename,"
+    "rec.size_bytes AS recording_size_bytes,rec.duration_seconds AS recording_duration_seconds,"
+    "rec.detail AS recording_detail,"
     + ",".join(f"r.{key}" for key in RECORD_FIELDS)
     + ","
     + ",".join(
@@ -144,6 +161,7 @@ SELECT = (
     )
     + " FROM jobs j JOIN campaigns c ON c.id=j.campaign_id "
     "LEFT JOIN call_records r ON r.job_id=j.id "
+    "LEFT JOIN recordings rec ON rec.job_id=j.id "
     "LEFT JOIN call_legs cl ON cl.job_id=j.id AND cl.role='customer' "
     "LEFT JOIN call_legs al ON al.job_id=j.id AND al.role='agent' "
 )
@@ -204,6 +222,36 @@ class Analytics:
         finally:
             db.close()
 
+    def trace(self, filters, limit=100, offset=0):
+        db = self.connect()
+        try:
+            db.execute("BEGIN")
+            where, values = filters.where()
+            metrics = dict(
+                db.execute(
+                    "SELECT COUNT(*) AS calls,COUNT(DISTINCT c.id) AS campaigns,"
+                    "SUM(CASE WHEN cl.answered_at IS NOT NULL THEN 1 ELSE 0 END) AS answered,"
+                    "SUM(CASE WHEN r.bridged_at IS NOT NULL THEN 1 ELSE 0 END) AS bridged,"
+                    "SUM(CASE WHEN rec.status='ready' THEN 1 ELSE 0 END) AS recordings,"
+                    "COALESCE(SUM(CASE WHEN rec.status='ready' THEN rec.size_bytes END),0) "
+                    "AS recording_bytes "
+                    "FROM jobs j JOIN campaigns c ON c.id=j.campaign_id "
+                    "LEFT JOIN call_records r ON r.job_id=j.id "
+                    "LEFT JOIN call_legs cl ON cl.job_id=j.id AND cl.role='customer' "
+                    "LEFT JOIN recordings rec ON rec.job_id=j.id WHERE " + where,
+                    values,
+                ).fetchone()
+            )
+            return {
+                "total": metrics["calls"],
+                "limit": limit,
+                "offset": offset,
+                "metrics": metrics,
+                "items": list(self.rows(db, filters, limit=limit, offset=offset)),
+            }
+        finally:
+            db.close()
+
     def detail(self, jid):
         db = self.connect()
         try:
@@ -212,6 +260,14 @@ class Analytics:
             if row is None:
                 raise KeyError(jid)
             result = decorate(row)
+            result["attempts"] = [dict(x) for x in db.execute(
+                "SELECT id,credit_id,attempt_number,status,detail,started_at,ended_at,available_at "
+                "FROM jobs WHERE contact_id=? ORDER BY attempt_number", (row["contact_id"],),
+            )]
+            decision = db.execute(
+                "SELECT reason,next_job_id,created_at FROM retry_decisions WHERE job_id=?", (jid,),
+            ).fetchone()
+            result["retry_decision"] = dict(decision) if decision else None
             recording = db.execute("SELECT * FROM recordings WHERE job_id=?", (jid,)).fetchone()
             result["recording"] = dict(recording) if recording else None
             result["legs"] = [

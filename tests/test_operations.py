@@ -75,7 +75,7 @@ def campaign(store):
             name="Local",
             template="Hola {nombre}",
             agent_number="200",
-            contacts=[Contact(phone="100", variables={"nombre": "Ana"})],
+            contacts=[Contact(phone="100", credit_id="CRED-100", variables={"nombre": "Ana"})],
         )
     )
 

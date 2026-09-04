@@ -20,6 +20,7 @@ CDR_COLUMNS = [
     ("campaign_id", "ID campaña"),
     ("mode", "Modo"),
     ("contact_name", "Nombre en contacto"),
+    ("credit_id", "Credito"),
     ("phone", "Teléfono cliente"),
     ("agent_number", "Número agente"),
     ("status_label", "Resultado"),
@@ -63,9 +64,16 @@ CDR_COLUMNS = [
     ("detail", "Detalle"),
     ("customer_trunk_id", "Troncal cliente"),
     ("agent_trunk_id", "Troncal agente"),
+    ("agent_strategy", "Distribución de transferencias"),
+    ("agent_pool_wait_seconds", "Espera de teléfono libre (s)"),
+    ("contact_id", "ID contacto en campaña"),
+    ("attempt_number", "Intento"),
+    ("retry_of", "ID intento anterior"),
+    ("available_at", "Reintento disponible desde"),
 ]
 DEFINITIONS = [
-    ("Fuente", "Base SQLite local; una fila CDR por contacto cuya sesión inició."),
+    ("Fuente", "Base SQLite local; una fila CDR por intento cuya sesión inició; "
+     "los reintentos tienen IDs distintos."),
     (
         "Cobertura measured",
         "Telemetría capturada por esta versión. Una celda vacía significa sin evidencia.",
@@ -77,6 +85,10 @@ DEFINITIONS = [
     (
         "Nombre en contacto",
         "Nombre importado. No identifica ni verifica a la persona que contestó.",
+    ),
+    (
+        "Credito",
+        "Identificador obligatorio importado con el contacto; se conserva en cada intento.",
     ),
     ("Respuesta", "Respuesta SIP 2xx al INVITE o llamada confirmada; puede ser un buzón."),
     ("AMD", "Clasificación probable por audio; no acredita identidad. Sin IA; puede equivocarse."),
@@ -209,7 +221,14 @@ def excel_report(rows, summary, events, filters):
         [
             "Período",
             f"{filters.date_from or 'Inicio'} → {filters.date_to or 'Actual'}",
-            f"Modo: {filters.mode}; campaña: {filters.campaign_id or 'Todas'}",
+            f"Modo: {filters.mode}; campaña: {filters.campaign_id or 'Todas'}; "
+            + (
+                f"Credito: {filters.credit_id}"
+                if filters.credit_id is not None
+                else f"Telefono: {filters.phone}"
+                if filters.phone is not None
+                else "sin identificador exacto"
+            ),
         ],
     )
     append(main, ["Indicador", "Resultado", "Base de cálculo"], header=True)

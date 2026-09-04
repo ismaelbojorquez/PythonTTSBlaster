@@ -24,6 +24,7 @@
       <button data-action="nav-dashboard" aria-current="page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>Dashboard</button>
       <button data-action="nav-campaigns"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 17-6v16L3 14zM7 15v6h4l-1-5M20 9h2v6h-2"/></svg>Campañas</button>
       <button data-action="nav-calls"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 4 5-3 3c2 3 3 4 6 6l3-3 5 4-2 3C10 23 1 14 3 5z"/></svg>Llamadas<span class="nav-caption">CDR</span></button>
+      <button data-action="nav-traceability"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v5H4zM13 14h7v5h-7zM11 7.5h3a3 3 0 0 1 3 3V14M13 16.5h-3a3 3 0 0 1-3-3V10"/></svg>Trazabilidad</button>
       <button data-action="nav-reports"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM14 3v5h5M8 17v-4m4 4V9m4 8v-6"/></svg>Reportes</button>
       <button data-action="nav-operations"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M8 3v4M16 10v4M10 17v4"/></svg>Operación<span id="alert-count" class="nav-caption" hidden></span></button>
     </nav>
@@ -86,6 +87,23 @@
         <article id="cdr-detail" tabindex="-1" hidden></article>
       </section>
 
+      <section id="traceability-view" hidden>
+        <div class="section-heading trace-heading"><div><h1>Trazabilidad por cliente</h1><p>Reúne cada blaster enviado a un mismo Credito o Telefono, incluso entre campañas e intentos.</p></div></div>
+        <form id="traceability-form" class="trace-search" aria-describedby="traceability-help">
+          <div><label for="traceability-by">Identificador</label><select id="traceability-by" name="by"><option value="credit">Credito</option><option value="phone">Telefono</option></select></div>
+          <div class="trace-query"><label for="traceability-query">Valor exacto</label><input id="traceability-query" name="query" type="search" maxlength="255" placeholder="Ej. CRED-000184" required autocomplete="off"></div>
+          <button type="submit" class="primary">Consultar historial</button>
+        </form>
+        <p id="traceability-help" class="field-help">La búsqueda es exacta. Para Telefono puedes pegar espacios, guiones o el signo +; se consultará el número internacional guardado.</p>
+        <div id="traceability-feedback" class="trace-feedback" role="status" aria-live="polite"></div>
+        <div id="traceability-result" hidden>
+          <div class="trace-result-head"><div><h2 id="traceability-title"></h2><p id="traceability-scope"></p></div><div class="report-actions"><a id="traceability-xlsx" class="secondary" download>Descargar XLSX</a><a id="traceability-bundle" class="primary" download>Descargar grabaciones + reporte</a></div></div>
+          <dl id="traceability-summary" class="trace-summary"></dl>
+          <div class="ledger trace-ledger"><div class="table-scroll"><table class="cdr-table"><caption class="visually-hidden">Blasters asociados al identificador consultado</caption><thead><tr><th>Inicio</th><th>Campaña</th><th>Credito</th><th>Telefono</th><th>Intento</th><th>Resultado</th><th>Grabación</th></tr></thead><tbody id="traceability-rows"></tbody></table></div><div class="pagination"><span id="traceability-page"></span><div><button class="subtle" data-action="trace-previous" id="trace-previous">Anterior</button><button class="subtle" data-action="trace-next" id="trace-next">Siguiente</button></div></div></div>
+        </div>
+        <div id="traceability-empty" class="inline-empty"><strong>Consulta un Credito o Telefono.</strong><span>Aquí aparecerán todas sus llamadas, campañas, intentos y grabaciones disponibles.</span></div>
+      </section>
+
       <section id="reports-view" hidden>
         <div class="report-feature"><div><h2>Tu operación, lista para analizar</h2><p>Descarga el mismo corte de fechas, campaña y origen que estás viendo. Cada archivo conserva las mediciones disponibles y distingue los registros históricos.</p><div class="report-actions"><button class="primary" data-action="download-xlsx">Generar reporte Excel</button><button class="secondary" data-action="download-csv">Descargar CDRs en CSV</button></div><p id="report-scope" class="small muted"></p><p id="report-progress" role="status"></p></div><div class="report-manifest"><span class="file-kind">XLSX</span><strong>Reporte de llamadas</strong><span>8 hojas · gráficos · filtros</span><ol><li>Resumen ejecutivo</li><li>Tendencia y resultados</li><li>Rendimiento por campaña</li><li>CDRs y tramos SIP</li><li>Eventos y definiciones</li></ol></div></div>
         <section class="report-definitions"><h2>Datos que puedes llevarte</h2><dl><div><dt>Respuesta y clasificación</dt><dd>Teléfono, nombre importado, respuesta SIP y resultado AMD con sus mediciones.</dd></div><div><dt>Transferencia al agente</dt><dd>Quién solicitó la conexión, marcación, respuesta del agente y duración del puente.</dd></div><div><dt>Tiempos y finalización</dt><dd>Inicio, timbrado, respuesta, audio activo, desconexión, códigos SIP e iniciador del cierre.</dd></div><div><dt>Evidencia trazable</dt><dd>IDs de sesión y de cada tramo SIP, cronología y cobertura de los registros.</dd></div></dl><p class="chart-footnote">Las duraciones son mediciones de la aplicación, no importes ni tiempos facturados por el proveedor. Las grabaciones de voz humana están disponibles por separado en el CDR, según permisos y conservación.</p></section>
@@ -112,16 +130,38 @@
           <div class="editor-fields">
             <label for="campaign-name">Nombre de la campaña</label>
             <input id="campaign-name" name="name" placeholder="Ej. Recordatorios de septiembre" maxlength="100" required>
-            <label for="agent-number">Número del agente</label>
-            <input id="agent-number" name="agent_number" type="tel" placeholder="52 55 1234 5678" required>
-            <p class="field-help">Se marcará a este número cuando la persona presione 2.</p>
-            <div class="label-row"><label for="contacts">Contactos</label><label for="csv-file" class="file-label">Importar CSV<input id="csv-file" type="file" accept=".csv,text/csv" class="visually-hidden"></label></div>
-            <textarea id="contacts" name="csv_text" rows="7" placeholder="telefono,nombre,fecha&#10;525512345678,Ana,viernes 12 de septiembre" required spellcheck="false"></textarea>
-            <p class="field-help">Una fila por persona. La columna <code>telefono</code> es obligatoria; las demás son variables de tu mensaje.</p>
+            <label for="country">País de los contactos</label>
+            <select id="country" name="country" aria-describedby="country-help" required><option value="MX" selected>México (+52)</option></select>
+            <p id="country-help" class="field-help" aria-live="polite">Escribe los contactos sin el prefijo +52. Se agregará automáticamente al marcar.</p>
+            <fieldset class="transfer-fields">
+              <legend>Transferencias</legend>
+              <p class="field-help">Al presionar 2 se elige un teléfono libre. Cada número admite una llamada a la vez, desde la marcación hasta el cierre.</p>
+              <label for="agent-country">País del pool</label><select id="agent-country" name="agent_country"><option value="">Mismo país que los contactos</option></select>
+              <label for="agent-number">Teléfonos de transferencia</label>
+              <textarea id="agent-number" name="agent_numbers_text" rows="3" placeholder="5512345678&#10;5512345679" aria-describedby="agent-help" required spellcheck="false"></textarea>
+              <p id="agent-help" class="field-help">Un número nacional por línea, sin +52. Puedes usar un solo teléfono o hasta 50.</p>
+              <div class="transfer-options">
+                <div><label for="agent-strategy">Distribución</label><select id="agent-strategy" name="agent_strategy"><option value="round_robin">Rotación en orden</option><option value="random">Aleatoria</option><option value="priority">Prioridad de lista</option></select></div>
+                <div><label for="agent-pool-wait">Espera si todos están ocupados (s)</label><input id="agent-pool-wait" name="agent_pool_wait" type="number" min="0" max="300" step="1" value="30" required aria-describedby="agent-wait-help"></div>
+              </div>
+              <p id="agent-strategy-help" class="field-help">Continúa desde el siguiente número y omite los ocupados.</p>
+              <p id="agent-wait-help" class="field-help">Los contactos esperan por orden de llegada. Al vencer el plazo escuchan un aviso y termina la llamada. Usa 0 para no esperar.</p>
+            </fieldset>
+            <div class="label-row"><label for="contacts">Contactos</label><label for="csv-file" class="file-label">Importar CSV o Excel<input id="csv-file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden"></label></div>
+            <div id="contact-sheet-field" class="contact-sheet-field" hidden><label for="contact-sheet">Hoja del Excel</label><select id="contact-sheet"></select></div>
+            <textarea id="contacts" name="csv_text" rows="7" placeholder="Credito,Telefono,nombre,fecha&#10;CRED-001,5512345678,Ana,viernes 12 de septiembre" required spellcheck="false" aria-describedby="country-help contacts-requirements"></textarea>
+            <p id="contacts-requirements" class="field-help"><code>Credito</code> y <code>Telefono</code> son obligatorios en cada fila. Tú defines las demás columnas. CSV o XLSX de hasta 8 MB.</p>
+            <p id="contacts-status" class="field-help" role="status" aria-live="polite"></p>
             <label for="template-picker">Usar una plantilla</label><select id="template-picker"><option value="">Escribir un mensaje nuevo</option></select>
             <label for="message">Mensaje personalizado</label>
             <textarea id="message" name="template" rows="5" maxlength="4000" required placeholder="Hola {nombre}. Te recordamos tu cita del {fecha}."></textarea>
-            <p class="field-help">Usa las columnas entre llaves: <code>{nombre}</code>, <code>{fecha}</code>. Las opciones del menú se agregan automáticamente.</p>
+            <p class="field-help">Usa el encabezado exacto entre llaves, incluidos espacios y acentos: <code>{Nombre completo}</code>. Las opciones del menú se agregan automáticamente.</p>
+            <div class="contact-variable-picker" role="group" aria-labelledby="variables-title">
+              <h3 id="variables-title">Variables de tus contactos</h3>
+              <p class="field-help">Pulsa una variable para insertarla en el mensaje. Debajo aparece el valor de la primera fila.</p>
+              <p id="variables-empty" class="field-help">Importa un archivo o pega tus contactos para ver sus encabezados.</p>
+              <div id="contact-variables" class="contact-variables"></div>
+            </div>
           </div>
           <div class="editor-preview">
             <h2>Así será la llamada</h2>
@@ -140,18 +180,47 @@
               </div>
             </div>
           </div>
-          <div class="form-footer"><p>Crear la campaña la guarda como borrador.<br>Podrás iniciar las llamadas desde su panel.</p><button class="primary" type="submit">Crear campaña</button></div>
+          <div id="creator-retries" class="creator-retries"></div>
+          <fieldset class="campaign-execution" aria-describedby="execution-help">
+            <legend>Cuándo ejecutar la campaña</legend>
+            <div class="execution-options">
+              <label><input type="radio" name="execution" value="draft" checked><span>Guardar borrador</span></label>
+              <label><input type="radio" name="execution" value="now"><span>Iniciar ahora</span></label>
+              <label><input type="radio" name="execution" value="scheduled"><span>Programar</span></label>
+            </div>
+            <p id="execution-help" class="field-help" aria-live="polite">Se guardará sin llamar. Podrás iniciarla desde su panel cuando estés listo.</p>
+            <div id="campaign-schedule-fields" class="campaign-schedule-fields" hidden>
+              <div><label for="campaign-local-at">Fecha y hora de inicio</label><input id="campaign-local-at" name="local_at" type="datetime-local" step="60" disabled></div>
+              <div><label for="campaign-timezone">Zona horaria</label><select id="campaign-timezone" name="schedule_timezone" disabled></select></div>
+              <p class="field-help">La fecha y hora corresponden a esta zona. Mantén la aplicación abierta y el equipo encendido. Si el motor está ocupado, esperará dentro del margen configurado.</p>
+            </div>
+            <p id="execution-warning" class="field-help" role="status"></p>
+          </fieldset>
+          <div class="form-footer execution-footer"><p id="campaign-save-error" role="alert"></p><button id="campaign-submit" class="primary" type="submit">Guardar borrador</button></div>
         </form>
       </section>
 
       <section id="campaign-view" hidden>
-        <div class="section-heading"><div><div class="heading-with-status"><h1 id="campaign-title">Campaña</h1><span id="campaign-state" class="badge">Borrador</span></div><p id="campaign-description"></p></div><div class="campaign-actions"><button class="secondary write-control" data-action="schedule-campaign">Programar</button><button id="start-button" class="primary" data-action="start">Iniciar simulación</button><button id="pause-button" class="secondary" data-action="pause" hidden>Pausar</button><button id="stop-button" class="danger-quiet" data-action="stop" hidden>Detener</button></div></div>
-        <div id="mode-information" class="mode-information">Modo simulación. Selecciona una llamada para probar las opciones del teclado.</div>
+        <div class="section-heading"><div><div class="heading-with-status"><h1 id="campaign-title" tabindex="-1">Campaña</h1><span id="campaign-state" class="badge">Borrador</span></div><p id="campaign-description"></p><p id="campaign-lineage" class="field-help"></p><div class="campaign-history-links"><button type="button" id="campaign-origin" class="text-link" data-action="select-campaign" hidden></button><button type="button" class="text-link" data-action="open-execution-history">Ver historial de ejecuciones</button></div></div><div class="campaign-actions"><button id="start-button" class="primary" data-action="start">Iniciar simulación</button><button id="pause-button" class="secondary" data-action="pause" hidden>Pausar</button><button id="stop-button" class="danger-quiet" data-action="stop" hidden>Detener</button><button type="button" id="rerun-button" class="primary" data-action="rerun-campaign" hidden>Volver a ejecutar</button><button type="button" id="duplicate-button" class="secondary" data-action="duplicate-campaign">Duplicar</button></div></div>
+        <p id="rerun-availability" class="field-help" role="status"></p>
+        <form id="campaign-copy-form" class="campaign-copy-form write-control" hidden>
+          <h2 id="campaign-copy-title">Nueva ejecución</h2>
+          <p id="campaign-copy-description"></p>
+          <div class="campaign-copy-fields"><div><label for="campaign-copy-name">Nombre</label><input id="campaign-copy-name" name="name" required maxlength="100"></div><div><label for="campaign-copy-note">Motivo para la auditoría <span class="muted">(opcional)</span></label><input id="campaign-copy-note" name="note" maxlength="500" placeholder="Ej. Segundo envío de recordatorios"></div></div>
+          <p id="campaign-copy-error" role="alert"></p>
+          <div class="campaign-copy-actions"><button type="submit" id="campaign-copy-submit" class="primary">Crear ejecución</button><button type="button" class="text-link" data-action="cancel-copy">Cancelar</button></div>
+        </form>
+        <div id="campaign-schedule-notice" class="mode-information" hidden><p id="campaign-schedule-description"></p><button type="button" class="text-link write-control" data-action="cancel-campaign-schedule">Cancelar programación</button></div>
+        <div id="mode-information" class="mode-information" role="status" aria-live="polite" aria-atomic="true">Modo simulación. Selecciona una llamada para probar las opciones del teclado.</div>
         <p id="amd-note" class="mode-information" hidden></p>
+        <details id="transfer-status" class="transfer-status"><summary id="transfer-summary">Pool de transferencia</summary><p id="transfer-policy" class="field-help"></p><ul id="transfer-numbers"></ul></details>
+        <details id="execution-history" class="execution-history"><summary>Historial de ejecuciones</summary><div id="execution-history-body"></div></details>
+        <details id="campaign-retries" class="campaign-retries"><summary id="retry-policy-summary">Reintentos</summary><p id="retry-policy-outcomes" class="field-help"></p><p id="retry-policy-locked" class="field-help">La política se conserva durante esta ejecución. Duplica la campaña para preparar otra con distintos reintentos.</p><form id="retry-policy-form" class="write-control" hidden><div id="detail-retry-fields"></div><button type="submit" class="secondary">Guardar reintentos</button><p id="retry-policy-result" class="field-help" role="status"></p></form></details>
+        <p id="retry-pending" class="field-help" role="status"></p>
         <div class="ledger-toolbar"><div id="campaign-summary">Contactos pendientes</div><a id="export-link" class="text-link" href="#">Exportar resultados</a></div>
         <div class="ledger-layout">
           <div class="ledger"><div class="table-scroll"><table><caption class="visually-hidden">Contactos y resultados de la campaña</caption><thead><tr><th scope="col">Contacto</th><th scope="col">Estado</th><th scope="col">Detalle</th></tr></thead><tbody id="job-rows"></tbody></table></div><div class="pagination"><span id="page-info"></span><div><button class="subtle" id="previous-page" data-action="previous">Anterior</button><button class="subtle" id="next-page" data-action="next">Siguiente</button></div></div></div>
-          <aside id="call-detail" class="call-detail" aria-label="Detalle de llamada" tabindex="-1"><h2>Detalle de llamada</h2><p class="muted">Selecciona un contacto para ver su mensaje y el recorrido de la llamada.</p></aside>
+          <aside id="call-detail" class="call-detail" aria-label="Detalle de llamada" tabindex="-1"><div id="call-detail-summary"><h2>Detalle de llamada</h2><p class="muted">Selecciona un contacto para escuchar su grabación y ver el recorrido de la llamada.</p></div><div id="call-recording" class="call-recording" hidden></div><div id="call-detail-activity"></div></aside>
         </div>
       </section>
     </main>

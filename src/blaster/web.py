@@ -5,52 +5,92 @@ import csv
 import fcntl
 import io
 import json
+import tempfile
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
+from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from blaster.agent_pool import AgentStrategy
 from blaster.analytics import Analytics, Filters
-from blaster.automation import Automation
+from blaster.automation import Automation, campaign_due_at
 from blaster.config import Settings
+from blaster.contact_files import import_contacts, read_csv
+from blaster.countries import countries, country_code
 from blaster.dialing import format_dial_number
 from blaster.engine import Engine
 from blaster.management import management_router, write_config
-from blaster.models import MENU, CampaignInput, parse_contacts, render_message
+from blaster.models import (
+    MENU,
+    CampaignInput,
+    parse_contacts,
+    phone_number,
+    render_message,
+    transfer_numbers,
+)
 from blaster.preview import AudioPreviewInput, SpeechPreview
 from blaster.reports import cdr_csv, excel_report
+from blaster.retries import RetryPolicy
 from blaster.security import Security
-from blaster.store import Store
+from blaster.store import Store, now
 from blaster.telephony.simulated import SimulatedTelephony
+from blaster.traceability import build_recording_bundle
 from blaster.tts import PiperSpeech, SimulatedSpeech
 
 STATIC = Path(__file__).parent / "static"
 
 
+class CampaignCopyForm(BaseModel):
+    request_id: UUID
+    name: str = Field(default="", max_length=100)
+    note: str = Field(default="", max_length=500)
+
+
 class CampaignForm(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     template: str = Field(min_length=1, max_length=4000)
-    agent_number: str
+    agent_number: str = ""
+    agent_numbers_text: str = Field(default="", max_length=4000)
+    agent_strategy: AgentStrategy = "round_robin"
+    agent_pool_wait: float = Field(default=30, ge=0, le=300)
+    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
     csv_text: str = Field(min_length=1, max_length=8_000_000)
+    country: str = "MX"
+    agent_country: str = ""
+    execution: Literal["draft", "now", "scheduled"] = "draft"
+    local_at: str = Field(default="", max_length=64)
+    schedule_timezone: str = Field(default="", max_length=100)
 
     def campaign(self, settings: Settings) -> CampaignInput:
+        agents = transfer_numbers(
+            self.agent_numbers_text, self.agent_number, self.agent_country or self.country
+        )
         campaign = CampaignInput(
             name=self.name,
             template=self.template,
-            agent_number=self.agent_number,
-            contacts=parse_contacts(self.csv_text),
+            agent_numbers=agents,
+            agent_strategy=self.agent_strategy,
+            agent_pool_wait=self.agent_pool_wait,
+            retry_policy=self.retry_policy,
+            contacts=parse_contacts(self.csv_text, self.country),
+            country=country_code(self.country),
+            agent_country=country_code(self.agent_country or self.country),
         )
         if settings.mode == "sip":
             for trunk in settings.trunk_profiles():
                 if trunk.enabled:
-                    format_dial_number(campaign.agent_number, trunk.sip.dial_format)
+                    for number in campaign.agent_numbers:
+                        format_dial_number(number, trunk.sip.dial_format)
                     for contact in campaign.contacts:
                         format_dial_number(contact.phone, trunk.sip.dial_format)
         return campaign
@@ -62,6 +102,10 @@ class ConcurrencyInput(BaseModel):
 
 class SimulationInput(BaseModel):
     action: str
+
+
+class ContactInspectionInput(BaseModel):
+    csv_text: str = Field(min_length=1, max_length=8_000_000)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -128,7 +172,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse({"detail": "Origen no autorizado"}, status_code=403)
             if request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse({"detail": "Origen no autorizado"}, status_code=403)
-            if request.headers.get("content-type", "").split(";")[0] != "application/json":
+            content_type = request.headers.get("content-type", "").split(";")[0]
+            file_upload = (
+                request.url.path == "/api/contacts/import"
+                and request.method == "POST"
+                and content_type == "application/octet-stream"
+            )
+            if content_type != "application/json" and not file_upload:
                 return JSONResponse({"detail": "Se requiere application/json"}, status_code=415)
             # Check actual received bytes too, so chunked bodies cannot bypass the limit.
             body = bytearray()
@@ -155,6 +205,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if (
                     (admin and user["role"] != "admin")
                     or (readonly and path.startswith("/api/recordings/"))
+                    or (readonly and path.startswith("/api/traceability/bundle"))
                     or (
                         readonly
                         and request.method not in {"GET", "HEAD", "OPTIONS"}
@@ -222,6 +273,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.store.db.execute("SELECT 1").fetchone()
         return {"status": "ok"}
 
+    @app.get("/api/countries")
+    async def country_catalog():
+        return countries()
+
     @app.get("/api/status")
     async def status():
         return {
@@ -268,6 +323,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def call_detail(jid: str):
         return await asyncio.to_thread(app.state.analytics.detail, jid)
 
+    def trace_filters(
+        by: Literal["credit", "phone"],
+        query: str = Query(min_length=1, max_length=255),
+    ) -> Filters:
+        value = unicodedata.normalize("NFC", query.strip())
+        if not value:
+            raise ValueError("Escribe el Credito o Telefono que deseas consultar")
+        if by == "phone":
+            value = phone_number(value)
+        elif any(ord(character) < 32 for character in value):
+            raise ValueError("Credito contiene caracteres no válidos")
+        result = Filters(
+            mode="all",
+            timezone=settings.reporting_timezone,
+            credit_id=value if by == "credit" else None,
+            phone=value if by == "phone" else None,
+        )
+        result.where()
+        return result
+
+    selected_trace = Depends(trace_filters)
+
+    @app.get("/api/traceability")
+    async def traceability(
+        selected: Filters = selected_trace,
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = page_offset,
+    ):
+        return await asyncio.to_thread(app.state.analytics.trace, selected, limit, offset)
+
     report_lock = asyncio.Lock()
 
     @app.get("/api/reports/{format}")
@@ -304,6 +389,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/api/traceability/report.xlsx")
+    async def traceability_report(request: Request, selected: Filters = selected_trace):
+        if report_lock.locked():
+            raise HTTPException(409, "Ya se está preparando un reporte. Espera a que termine.")
+
+        def generate():
+            rows, summary, events = app.state.analytics.report_data(
+                selected, settings.report_max_rows
+            )
+            return excel_report(rows, summary, events, selected), len(rows)
+
+        async with report_lock:
+            content, count = await asyncio.to_thread(generate)
+        identifier = selected.credit_id if selected.credit_id is not None else selected.phone
+        app.state.engine.ops.audit(
+            request.state.user,
+            "traceability.report_downloaded",
+            identifier,
+            {"by": "credit" if selected.credit_id is not None else "phone", "calls": count},
+        )
+        return Response(
+            content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="blaster-trazabilidad.xlsx"',
+            },
+        )
+
+    @app.get("/api/traceability/bundle.zip")
+    async def traceability_bundle(request: Request, selected: Filters = selected_trace):
+        if report_lock.locked():
+            raise HTTPException(409, "Ya se está preparando una descarga. Espera a que termine.")
+        report_dir = settings.data_dir / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        handle = tempfile.NamedTemporaryFile(
+            prefix="traceability-", suffix=".zip", dir=report_dir, delete=False
+        )
+        target = Path(handle.name)
+        handle.close()
+
+        def generate():
+            rows, summary, events = app.state.analytics.report_data(
+                selected, settings.report_max_rows
+            )
+            xlsx = excel_report(rows, summary, events, selected)
+            return build_recording_bundle(
+                target, rows, xlsx, app.state.engine.recordings.directory
+            )
+
+        try:
+            async with report_lock:
+                bundle = await asyncio.to_thread(generate)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        identifier = selected.credit_id if selected.credit_id is not None else selected.phone
+        app.state.engine.ops.audit(
+            request.state.user,
+            "traceability.bundle_downloaded",
+            identifier,
+            {"by": "credit" if selected.credit_id is not None else "phone", **bundle},
+        )
+        return FileResponse(
+            target,
+            media_type="application/zip",
+            filename="blaster-trazabilidad-grabaciones.zip",
+            background=BackgroundTask(target.unlink, missing_ok=True),
+        )
+
     @app.post("/api/settings")
     async def configure(payload: ConcurrencyInput):
         previous = settings.concurrency
@@ -320,27 +474,98 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def campaigns():
         return app.state.store.campaigns()
 
+    @app.post("/api/campaigns/{cid}/retries")
+    async def configure_retries(cid: str, payload: RetryPolicy, request: Request):
+        store = app.state.store
+        campaign = store.campaign(cid)
+        if campaign["status"] != "draft" or store.db.execute(
+            "SELECT 1 FROM jobs WHERE campaign_id=? AND started_at IS NOT NULL LIMIT 1", (cid,),
+        ).fetchone():
+            raise ValueError("Configura los reintentos antes de iniciar la campaña. "
+                             "Puedes duplicarla para preparar otro envío")
+        with store.db:
+            store.db.execute("UPDATE campaigns SET retry_policy=? WHERE id=?",
+                             (payload.model_dump_json(), cid))
+            # Audit and policy are one transaction, even when a draft has a schedule.
+            store.db.execute(
+                "INSERT INTO audit(created_at,actor_id,actor_name,action,target,detail) "
+                "VALUES(?,?,?,?,?,?)",
+                (now(), request.state.user.get("id"), request.state.user.get("username", "local"),
+                 "campaign.retries_updated", cid, json.dumps({
+                     "before": campaign["retry_policy"], "after": payload.model_dump(),
+                 })),
+            )
+        return {"ok": True, "retry_policy": payload.model_dump()}
+
     @app.post("/api/campaigns", status_code=201)
-    async def create_campaign(payload: CampaignForm):
-        cid = app.state.store.create_campaign(payload.campaign(settings), settings.mode)
-        return {"id": cid}
+    async def create_campaign(payload: CampaignForm, request: Request):
+        campaign = payload.campaign(settings)
+        engine, store = app.state.engine, app.state.store
+        schedule = None
+        if payload.execution == "scheduled":
+            if not settings.automation.enabled:
+                raise ValueError(
+                    "Activa las tareas programadas en Configuración antes de programar"
+                )
+            due = campaign_due_at(payload.local_at, payload.schedule_timezone)
+            schedule = {
+                "due_at": due.isoformat(), "timezone": payload.schedule_timezone,
+                "created_by": request.state.user["id"],
+            }
+        elif payload.execution == "now":
+            engine.ensure_startable()
+            engine.validate_destinations(
+                campaign.agent_numbers, [c.phone for c in campaign.contacts]
+            )
+        cid = store.create_campaign(campaign, settings.mode, schedule=schedule)
+        engine.ops.audit(request.state.user, "campaign.created", cid, {
+            "name": campaign.name, "contacts": len(campaign.contacts),
+            "mode": settings.mode, "execution": payload.execution,
+            "retry_policy": campaign.retry_policy.model_dump(),
+        })
+        if payload.execution == "now":
+            try:
+                engine.start_campaign(cid)
+            except ValueError as error:
+                # A last-minute trunk change must not lose the saved campaign or invite retries.
+                return {"id": cid, "execution": "draft", "start_error": str(error)}
+        if schedule:
+            engine.ops.audit(request.state.user, "campaign.scheduled", cid, schedule)
+        elif payload.execution == "now":
+            engine.ops.audit(request.state.user, "campaign.started_on_create", cid, {})
+        return {"id": cid, "execution": payload.execution, "schedule": store.pending_schedule(cid)}
 
     @app.post("/api/preview")
     async def preview(payload: CampaignForm):
         campaign = payload.campaign(settings)
         return {
             "count": len(campaign.contacts),
+            "agent_numbers": campaign.agent_numbers,
             "menu": MENU,
             "samples": [
                 {
                     "phone": c.phone,
                     "message": render_message(
-                        campaign.template, {**c.variables, "telefono": c.phone}
+                        campaign.template,
+                        {**c.variables, "telefono": c.phone, "credito": c.credit_id},
                     ),
                 }
                 for c in campaign.contacts[:3]
             ],
         }
+
+    @app.post("/api/contacts/import")
+    async def contacts_import(
+        request: Request,
+        filename: str = Query(max_length=255),
+        sheet: str = Query(default="", max_length=100),
+    ):
+        return await asyncio.to_thread(import_contacts, await request.body(), filename, sheet)
+
+    @app.post("/api/contacts/inspect")
+    async def contacts_inspect(payload: ContactInspectionInput):
+        table = await asyncio.to_thread(read_csv, payload.csv_text)
+        return table.metadata()
 
     @app.post("/api/preview/audio")
     async def preview_audio(payload: AudioPreviewInput):
@@ -372,12 +597,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def events(jid: str):
         return app.state.store.events(jid)
 
+    @app.get("/api/campaigns/{cid}/history")
+    async def campaign_history(cid: str, offset: int = Query(default=0, ge=0)):
+        return app.state.store.history.history(cid, offset)
+
+    async def copy_campaign(cid, kind, payload, request):
+        store, engine = app.state.store, app.state.engine
+        history = store.history
+        source = store.campaign(cid)
+        name = payload.name.strip() or (
+            source["name"] if kind == "rerun" else source["name"][:92] + " (copia)"
+        )
+        note = payload.note.strip()
+        actor = request.state.user
+        fingerprint = history.fingerprint(cid, kind, name, note, actor)
+        new_id = history.replay(str(payload.request_id), fingerprint)
+        if new_id:
+            return {"id": new_id, "replayed": True,
+                    "start_error": history.lineage(new_id)["start_error"]}
+        try:
+            if kind == "rerun":
+                if source["mode"] != settings.mode:
+                    raise ValueError("Duplica la campaña para crear un borrador en el modo actual")
+                history.check_rerun(cid)
+                engine.ensure_startable()
+                engine.validate_destinations(
+                    source["agent_numbers"], [j["phone"] for j in store.jobs(cid, 10000)]
+                )
+            new_id = history.copy(
+                cid, kind, name, note, str(payload.request_id), actor, settings.mode, fingerprint
+            )
+        except ValueError as error:
+            engine.ops.audit(actor, f"campaign.{kind}_rejected", cid, {
+                "request_id": str(payload.request_id), "reason": str(error), "note": note,
+            })
+            raise
+        if kind == "rerun":
+            engine.ops.audit(actor, "campaign.start_requested", new_id, history.lineage(new_id))
+            try:
+                engine.start_campaign(new_id)
+            except ValueError as error:
+                with store.db:
+                    store.db.execute(
+                        "UPDATE campaign_copies SET start_error=? WHERE campaign_id=?",
+                        (str(error), new_id),
+                    )
+                engine.ops.audit(actor, "campaign.start_failed", new_id, {"reason": str(error)})
+                return {"id": new_id, "start_error": str(error), "replayed": False}
+            engine.ops.audit(actor, "campaign.rerun_started", new_id, history.lineage(new_id))
+        return {"id": new_id, "replayed": False}
+
+    @app.post("/api/campaigns/{cid}/rerun", status_code=201)
+    async def rerun_campaign(cid: str, payload: CampaignCopyForm, request: Request):
+        return await copy_campaign(cid, "rerun", payload, request)
+
+    @app.post("/api/campaigns/{cid}/duplicate", status_code=201)
+    async def duplicate_campaign(cid: str, payload: CampaignCopyForm, request: Request):
+        return await copy_campaign(cid, "duplicate", payload, request)
+
     @app.post("/api/campaigns/{cid}/{action}")
-    async def campaign_action(cid: str, action: str):
+    async def campaign_action(cid: str, action: str, request: Request):
         engine = app.state.engine
         if action == "start":
-            engine.start_campaign(cid)
+            engine.store.campaign(cid)
+            lineage = engine.store.history.lineage(cid)
+            engine.ops.audit(request.state.user, "campaign.start_requested", cid, lineage)
+            try:
+                engine.start_campaign(cid)
+            except ValueError as error:
+                engine.ops.audit(
+                    request.state.user, "campaign.start_failed", cid, {"reason": str(error)}
+                )
+                raise
+            engine.ops.audit(request.state.user, "campaign.started", cid, lineage)
             with engine.store.db:
+                engine.store.db.execute(
+                    "UPDATE campaign_copies SET start_error=NULL WHERE campaign_id=?", (cid,),
+                )
                 engine.store.db.execute(
                     "UPDATE campaign_schedules SET state='cancelled',"
                     "detail='Iniciada manualmente' WHERE campaign_id=? "
@@ -402,9 +698,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.store.campaign(cid)
         output = io.StringIO()
         writer = csv.writer(output)
-        columns = ["phone", "status", "detail", "started_at", "ended_at"]
-        writer.writerow(["telefono", "estado", "detalle", "inicio", "fin"])
-        for row in app.state.store.jobs(cid, limit=10000):
+        columns = [
+            "credit_id", "phone", "status", "detail", "started_at", "ended_at", "id",
+            "contact_id", "attempt_number", "retry_of", "available_at",
+        ]
+        writer.writerow(["credito", "telefono", "estado", "detalle", "inicio", "fin", "id_llamada",
+                         "id_contacto", "intento", "intento_anterior", "disponible_desde"])
+        for row in app.state.store.jobs(cid, limit=100000, latest=False):
             values = [str(row[column] or "") for column in columns]
             # Preserve telephone numbers and prevent spreadsheet formula interpretation.
             writer.writerow(

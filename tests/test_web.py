@@ -7,7 +7,7 @@ PAYLOAD = {
     "name": "Prueba",
     "template": "Hola {nombre}",
     "agent_number": "+525550009999",
-    "csv_text": "telefono,nombre\n+525550000101,Ana",
+    "csv_text": "Credito,telefono,nombre\nWEB-1,+525550000101,Ana",
 }
 
 

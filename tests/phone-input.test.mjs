@@ -14,6 +14,13 @@ test("CSV cleanup handles BOM, reordered columns, quotes and multiline variables
   assert.equal(removeCsvPhonePlus("nombre\nAna + Luis"), "nombre\nAna + Luis");
 });
 
+test("CSV cleanup recognizes phone header variants and Excel separators", () => {
+  for (const separator of [",", ";", "\t"]) {
+    const csv = `" Teléfono "${separator}Nombre completo${separator}Nota\n+525512345678${separator}Ana + Luis${separator}C++`;
+    assert.equal(removeCsvPhonePlus(csv), csv.replace("+525512345678", "525512345678"));
+  }
+});
+
 test("typing a plus removes it without moving the caret to the end", () => {
   const field = {
     value: "52+5512345678", selectionStart: 3, selectionEnd: 3, selectionDirection: "none",

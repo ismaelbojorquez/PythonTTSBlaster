@@ -42,6 +42,9 @@
   Consulta las licencias empaquetadas de SoundFile, libsndfile y sus codecs.
 - **tomlkit 0.15.1**: https://github.com/python-poetry/tomlkit. Escritura del TOML
   conservando comentarios y formato. Licencia MIT.
+- **phonenumbers 9.0.38**: https://github.com/daviddrysdale/python-phonenumbers.
+  Reglas locales de numeración internacional basadas en libphonenumber. Convierte
+  los números nacionales usando el país seleccionado. Licencia Apache-2.0.
 
 El código original de la aplicación se distribuye bajo la licencia
 [MIT](LICENSE), Copyright (c) 2026 c1ph3rbyt3. Las dependencias y voces conservan

@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import logging
 import queue
-import re
 import struct
 import threading
 import time
@@ -22,6 +21,7 @@ from blaster.diagnostics import error_detail
 from blaster.dialing import format_dial_number
 from blaster.telemetry import CallEvent
 from blaster.telephony.base import AudioStream, CallEnded, CallProgress, Leg, Telephony
+from blaster.telephony.sip_evidence import invite_response
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +62,8 @@ class PJSUALeg(Leg):
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.closed.wait(), 5)
         # Retain native objects until DISCONNECTED; their lifetime is independent.
-        self.backend.legs.pop(self.id, None)
+        if self.closed.is_set():
+            self.backend.legs.pop(self.id, None)
 
 
 class PJSUATelephony(Telephony):
@@ -122,7 +123,8 @@ class PJSUATelephony(Telephony):
             with contextlib.suppress(Exception):
                 await pending
                 await leg.hangup()
-            self.legs.pop(leg.id, None)
+            if leg.closed.is_set():
+                self.legs.pop(leg.id, None)
             raise
         except Exception:
             self.legs.pop(leg.id, None)
@@ -153,6 +155,7 @@ class PJSUATelephony(Telephony):
             leg.code, leg.reason = value
             leg.emit("closed", code=leg.code, reason=leg.reason)
             leg.closed.set()
+            self.legs.pop(lid, None)
         elif event == "trace":
             if value.kind == "termination":
                 if leg.termination is not None:
@@ -256,20 +259,54 @@ class PJSUATelephony(Telephony):
                     self.capture_source = None
                     self.identity_reported = False
                     self.answer_reported = False
+                    self.dial_context = {}
 
                 def trace(self, kind, **data):
                     owner._notify(self.lid, "trace", CallEvent(kind, data))
 
                 def received(self, event):
                     # Extract only evidence we use; never persist SIP messages or credentials.
-                    message = ""
+                    rdata = None
                     if event.type == pj.PJSIP_EVENT_RX_MSG:
-                        message = event.body.rxMsg.rdata.wholeMsg
+                        rdata = event.body.rxMsg.rdata
                     elif (
                         event.type == pj.PJSIP_EVENT_TSX_STATE
                         and event.body.tsxState.type == pj.PJSIP_EVENT_RX_MSG
                     ):
-                        message = event.body.tsxState.src.rdata.wholeMsg
+                        rdata = event.body.tsxState.src.rdata
+                    if rdata is None:
+                        return
+                    message = rdata.wholeMsg
+                    response = invite_response(message)
+                    if response:
+                        key = (response["cseq"], response["code"])
+                        if key not in self.reported_responses:
+                            self.reported_responses.add(key)
+                            response["source"] = " ".join(rdata.srcAddress.split())[:100]
+                            self.trace("response", **response)
+                            code = response["code"]
+                            if code == 180:
+                                self.trace("ringing")
+                            if 200 <= code < 300 and not self.answer_reported:
+                                self.answer_reported = True
+                                self.trace("answered")
+                            if 300 <= code < 400:
+                                self.trace("redirect_reported", code=code, actor="trunk")
+                            owner._notify(
+                                self.lid, "progress",
+                                CallProgress("response", time.monotonic(), code),
+                            )
+                            if code >= 300:
+                                causes = ", ".join(
+                                    f"{r['protocol']} causa={r['cause']}"
+                                    for r in response["reason_causes"]
+                                ) or "no informado"
+                                log.info(
+                                    "Diagnóstico SIP: RX %s; origen=%s; Reason=%s; "
+                                    "Retry-After=%s; id=%s",
+                                    code, response["source"], causes,
+                                    response["retry_after"], self.lid,
+                                )
                     method = message.partition(" ")[0]
                     if method in {"BYE", "CANCEL"}:
                         self.trace(
@@ -288,36 +325,15 @@ class PJSUATelephony(Telephony):
                         return
                     if event.type == pj.PJSIP_EVENT_TX_MSG and not self.invite_reported:
                         self.invite_reported = True
-                        self.trace("invite_sent")
+                        self.trace("invite_sent", **self.dial_context)
                         owner._notify(
                             self.lid, "progress", CallProgress("invite_sent", time.monotonic())
                         )
-                    elif event.type == pj.PJSIP_EVENT_RX_MSG:
-                        code = event.tsx.statusCode
-                        if code not in self.reported_responses:
-                            self.reported_responses.add(code)
-                            message = event.src.rdata.wholeMsg
-                            retry = re.search(r"(?im)^Retry-After:\s*(\d+)", message)
-                            self.trace(
-                                "response",
-                                code=code,
-                                retry_after=min(86400, int(retry.group(1))) if retry else 0,
-                            )
-                            if code == 180:
-                                self.trace("ringing")
-                            if 200 <= code < 300 and not self.answer_reported:
-                                self.answer_reported = True
-                                self.trace("answered")
-                            if 300 <= code < 400:
-                                self.trace("redirect_reported", code=code, actor="trunk")
-                            owner._notify(
-                                self.lid,
-                                "progress",
-                                CallProgress("response", time.monotonic(), code),
-                            )
 
                 def onCallState(self, prm):
                     info = self.getInfo()
+                    # PJSIP may deliver the final response here before onCallTsxState.
+                    # Capture it before queuing "closed", which releases the Python leg.
                     self.received(prm.e)
                     if not self.identity_reported and info.callIdString:
                         self.identity_reported = True
@@ -503,6 +519,19 @@ class PJSUATelephony(Telephony):
                     if hasattr(param.opt, "textCount"):
                         param.opt.textCount = 0
                     try:
+                        sip = profiles[tid].sip
+                        call.dial_context = {
+                            "target_uri": f"sip:{number}@{sip.domain}",
+                            "from_uri": f"sip:{sip.caller_id or sip.username}@{sip.domain}",
+                            "transport": sip.transport,
+                            "trunk_id": tid,
+                        }
+                        log.info(
+                            "Marcación SIP: destino=sip:%s@%s; From=sip:%s@%s; "
+                            "transporte=%s; troncal=%s; id=%s",
+                            number, sip.domain, sip.caller_id or sip.username, sip.domain,
+                            sip.transport, tid, lid,
+                        )
                         call.makeCall(f"sip:{number}@{profiles[tid].sip.domain}", param)
                     except Exception:
                         retired.add(lid)

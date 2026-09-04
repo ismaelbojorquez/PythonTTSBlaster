@@ -5,18 +5,54 @@ personalizados, detección acústica de buzón, conexión con agentes y analíti
 El panel, la cola y el puente de audio funcionan en un único proceso. No requiere
 Asterisk, FreeSWITCH, Redis ni una API de TTS externa.
 
-**Empieza por [INSTALL.md](INSTALL.md) para instalar desde cero en Ubuntu.**
-Incluye el usuario `deploy`, Python 3.12, la troncal y el servicio systemd.
+**Ejecución local en macOS desde la carpeta del proyecto y su entorno `.venv`.**
+El panel se abre en [localhost:8765](http://localhost:8765). La
+[guía local](docs/local.md) explica el arranque y la configuración.
+
+## Arrancar en tu Mac
+
+Si ya tienes `.venv`, `config.toml` y el modelo de voz en esta carpeta:
+
+```bash
+.venv/bin/python run.py --config config.toml --check
+.venv/bin/python run.py --config config.toml
+```
+
+También puedes abrir **`iniciar.command`** con doble clic o ejecutarlo con
+`./iniciar.command`. Utiliza el Python de `.venv` y la configuración de esta
+carpeta. Mantén la terminal abierta; **Ctrl+C** detiene la aplicación.
+
+Los valores del panel para uso local, antes de cualquier sección del TOML, son:
+
+```toml
+web_public_url = ""
+web_port = 8765
+data_dir = "data"
+voice_model = "voices/es_MX-claude-high.onnx"
+```
+
+El arranque local no requiere dominio, túnel, usuario de servicio ni instalación
+global de la aplicación. Los datos, modelos y dependencias permanecen dentro del
+proyecto. Para una copia nueva, consulta la [preparación local](docs/local.md).
 
 ## Funcionalidades
 
-- Campañas desde CSV, variables por contacto y plantillas reutilizables.
+- Campañas desde CSV o XLSX con Credito y Telefono obligatorios, números nacionales
+  y selector de país (México por defecto), variables libres y plantillas reutilizables.
+- Desde el creador: guardar borrador, iniciar al momento o programar fecha, hora
+  y zona horaria; historial de ejecuciones programadas y cancelación de pendientes.
+- Desde el detalle: volver a ejecutar con CDR independientes o duplicar como
+  borrador, conservando el origen, el historial y la auditoría de cada envío.
+- Pools de transferencia con una llamada por teléfono, rotación en orden,
+  selección aleatoria o prioridad, espera configurable y pausa automática de
+  nuevas marcaciones mientras todos los destinos estén ocupados.
 - Piper local y vista previa de voz antes de crear una campaña.
 - DTMF: **1** repite el mensaje; **2** marca al agente y conecta ambos extremos.
 - AMD sin modelos de IA: reglas de voz, pausas y tonos antes del TTS.
 - Una o varias troncales, prioridades, respaldo y distribución de carga.
 - Límites globales y por troncal: concurrencia, canales, CPS y puertos SIP/RTP.
-- Dashboard, CDR por sesión/tramo, cronología, exportación CSV y Excel.
+- Dashboard, CDR por sesión/tramo, cronología y trazabilidad global por Credito o
+  Telefono, con XLSX y ZIP masivo de grabaciones disponibles más su manifiesto.
 - Programación de campañas, reportes automáticos y alertas dentro del panel.
 - Usuarios con roles, auditoría y grabaciones locales Ogg Opus desde evidencia humana.
 - Simulación sin abrir la troncal ni realizar llamadas.
@@ -30,7 +66,7 @@ Incluye el usuario `deploy`, Python 3.12, la troncal y el servicio systemd.
 | Voz | Piper y modelos ONNX locales |
 | AMD | Python/NumPy, análisis acústico determinista |
 | Datos | SQLite; grabaciones y reportes en archivos locales |
-| Servicio Ubuntu | systemd, usuario `blaster`, HTTP en loopback |
+| Ejecución local | Terminal, Python de `.venv`, HTTP en loopback |
 
 La aplicación usa bibliotecas nativas C/C++ para SIP, medios y síntesis. Piper
 utiliza un modelo neuronal; el detector AMD no utiliza IA.
@@ -84,7 +120,8 @@ requiere Python 3.12 o 3.13. Windows nativo no está soportado.
 
 | Guía | Contenido |
 |---|---|
-| [Instalación desde cero](INSTALL.md) | Servidor, usuario, Python, instalación y acceso |
+| [Ejecución local en Mac](docs/local.md) | Arranque desde la carpeta, entorno y localhost |
+| [Instalación opcional en Ubuntu](INSTALL.md) | Servidor, usuario, Python, instalación y acceso |
 | [Configuración](docs/configuration.md) | TOML, SIP, varias troncales, puertos y límites |
 | [Uso del panel](docs/usage.md) | Campañas, roles, agenda, CDR, reportes y grabaciones |
 | [Producción](docs/production.md) | Servicio, actualización, respaldos y recuperación |

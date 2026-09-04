@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from amd_samples import signal, silence
@@ -60,14 +61,25 @@ async def test_amd_unknown_policy_and_history(engine, action):
         assert any("Incierto" in e["detail"] for e in engine.store.events(jid))
         engine.simulate(jid, "hangup")
         await until(lambda: not engine.sessions)
+        recording = engine.store.db.execute(
+            "SELECT evidence FROM recordings WHERE job_id=?", (job["id"],)
+        ).fetchone()
+        assert recording["evidence"] == "amd_inconclusive_continued"
     else:
         await until(lambda: engine.active_campaign is None)
         assert engine.store.jobs(cid)[0]["status"] == "amd_unknown"
         assert not any(e["status"] == "synthesizing" for e in engine.store.events(job["id"]))
+    event = json.loads(engine.store.db.execute(
+        "SELECT data FROM call_events WHERE job_id=? AND kind='amd'", (job["id"],)
+    ).fetchone()[0])
+    assert event["detector_version"] == "energy-timing-v2"
+    assert event["parameters"] == engine.settings.amd.model_dump()
+    assert event["parameters"]["unknown_action"] == action
+    assert event["voiced_ms"] == 0
 
 
 async def test_concurrent_amd_results_do_not_mix(engine):
-    engine.settings.amd = AMDSettings(enabled=True)
+    engine.settings.amd = AMDSettings(enabled=True, unknown_action="hangup")
     cid = campaign(engine, count=2)
     jobs = engine.store.jobs(cid)
     engine.telephony.amd_audio[jobs[0]["phone"]] = signal(3000, (1000,))

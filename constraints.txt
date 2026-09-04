@@ -19,6 +19,7 @@ openpyxl==3.1.5
 onnxruntime==1.29.0
 packaging==26.3
 pathvalidate==3.3.1
+phonenumbers==9.0.38
 piper-tts==1.7.0
 pluggy==1.6.0
 protobuf==7.36.1

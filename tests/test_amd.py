@@ -81,6 +81,56 @@ def test_independent_detectors_and_arbitrary_pcm_chunk_boundaries():
     assert machine.result.reason == "beep"
 
 
+def test_rejected_clicks_do_not_turn_later_human_greeting_into_machine():
+    pcm = (signal(80) + silence(60)) * 35 + signal(400) + silence(1400)
+    result = classify(pcm, initial_silence_ms=6000, total_analysis_ms=10000)
+    assert (result.verdict, result.reason) == ("human", "short_greeting")
+    assert result.voiced_ms == 400
+
+
+def test_clicks_in_pause_do_not_restart_the_human_silence_clock():
+    result = classify(signal(400) + (silence(280) + signal(20)) * 6)
+    assert result.verdict == "human"
+    assert result.audio_ms == 1400
+    assert result.voiced_ms == 400
+
+
+def test_a_single_short_qualified_burst_is_not_enough_to_accept_human():
+    result = classify(signal(120) + silence(5200))
+    assert result.verdict == "unknown"
+    assert result.voiced_ms == 120
+
+
+def test_a_greeting_starting_just_before_initial_deadline_can_finish():
+    result = classify(silence(2440) + signal(400) + silence(1400))
+    assert result.verdict == "human"
+    assert result.voiced_ms == 400
+
+
+def test_tone_below_beep_duration_is_not_accepted_as_human_speech():
+    result = classify(signal(280, (1000,)) + silence(3000), beep_min_ms=360)
+    assert result.verdict == "unknown"
+    assert result.voiced_ms == 0
+
+
+def test_calibrated_example_handles_long_human_and_machine_with_internal_pause():
+    from pathlib import Path
+
+    profile = load_settings(Path(__file__).resolve().parents[1] / "config.example.toml").amd
+    options = profile.model_dump()
+    assert options["total_analysis_ms"] == 5000
+    assert options["unknown_action"] == "continue"
+    human = classify(signal(2800) + silence(1800), **options)
+    assert human.verdict == "human"
+    paused_machine = classify(signal(800) + silence(1200) + signal(3000), **options)
+    assert (paused_machine.verdict, paused_machine.reason) == ("machine", "long_greeting")
+    fragmented_human = classify((signal(180) + silence(120)) * 7 + silence(1500), **options)
+    assert fragmented_human.verdict == "human"
+    late_human = classify(silence(3140) + signal(400) + silence(1600), **options)
+    assert late_human.verdict == "human"
+    assert classify(signal(600, (1000,)), **options).reason == "beep"
+
+
 async def test_capture_is_bounded_and_overflow_is_not_classified_as_human():
     stream = AudioStream()
     for _ in range(51):
@@ -147,6 +197,7 @@ def test_amd_toml_and_validation(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[amd]\nenabled = true\nunknown_action = "continue"\n')
     assert load_settings(path).amd.unknown_action == "continue"
+    assert AMDSettings().unknown_action == "continue"
     assert not Settings().amd.enabled
     for bad in (
         {"unknown_action": "guess"}, {"total_analysis_ms": 999},
@@ -155,6 +206,8 @@ def test_amd_toml_and_validation(tmp_path):
         {"silence_threshold": -1}, {"beep_purity": 0.5},
         {"after_greeting_silence_ms": 400, "between_words_silence_ms": 400},
         {"enabledd": True},
+        {"minimum_human_speech_ms": 0},
+        {"greeting_speech_ms": 500, "minimum_human_speech_ms": 600},
     ):
         with pytest.raises(ValueError):
             AMDSettings(**bad)

@@ -137,6 +137,54 @@ una conexión TCP no comprueba una troncal UDP. Si el destino no responde, revis
 host/puerto remoto, transporte, IP autorizada y filtros de red. `local_port` no
 cambia el puerto del proveedor. Referencia: [SIP RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html).
 
+## La troncal aparece conectada, pero la llamada devuelve SIP 480
+
+«Conectada» indica registro SIP activo (o ruta habilitada si se autentica por IP).
+Un `480 Temporarily Unavailable` es una respuesta a esa llamada y por sí solo no
+identifica la causa: no demuestra bloqueo por IP, contraseña incorrecta ni fallo
+del TTS. Tampoco prueba que el teléfono haya timbrado.
+
+En macOS, reinicia desde la terminal del proyecto para cargar el diagnóstico:
+
+```bash
+.venv/bin/python run.py --config config.toml
+```
+
+Al reproducir el rechazo, busca estas líneas:
+
+- `Marcación SIP`: destino, identidad From y troncal utilizados.
+- `Diagnóstico SIP: RX 480`: servidor que respondió, códigos `Reason` SIP/Q.850
+  si fueron enviados y `Retry-After` si existe.
+- `Llamada SIP rechazada`: identificador Call-ID para correlacionar con el proveedor.
+
+Se guardan también los campos del INVITE y de la respuesta en los eventos del CDR,
+sin guardar paquetes completos ni autenticación Digest. Esto aplica a llamadas
+nuevas: los detalles ausentes de llamadas anteriores no pueden reconstruirse.
+`Reason=no informado` significa que no se recibió un código de causa compatible;
+en ese caso, el proveedor necesita la hora, destino y Call-ID para buscar el motivo
+interno. Verifica con él la ruta de salida y la identidad From autorizada.
+
+El número se normaliza según el país seleccionado en el creador. Para México se
+envía `52` más diez dígitos, sin `+`. Un destino que ya tiene este formato no debe
+recibir otro `52`. No cambies puertos, NAT o códecs basándote sólo en el 480.
+Referencias: [SIP 480](https://www.rfc-editor.org/rfc/rfc3261.html#section-21.4.18)
+
+## La llamada devuelve SIP 504 Server Time-out
+
+El `504` pertenece a los fallos de servidor SIP. Indica que la troncal o un
+servidor intermedio no recibió a tiempo la respuesta de otro servidor al intentar
+procesar la llamada. No prueba por sí solo que el teléfono esté apagado: ese puede
+ser el motivo real dentro de la red móvil, pero el proveedor sólo entregó el
+resultado observable `504`.
+
+Blaster lo presenta como **Fallo temporal de la troncal**, conserva el código 504
+en el CDR y permite reintentar cuando esa opción está activa en la campaña. Si hay
+otra troncal disponible, primero aplica el respaldo configurado. `408` y `480`
+continúan agrupados como **Sin respuesta**; `486` y `600`, como **Ocupado**.
+
+Referencia: [SIP 504 en RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html#section-21.5.5)
+y [causa Q.850 en respuestas SIP](https://www.rfc-editor.org/rfc/rfc6432.html).
+
 ## La llamada entra, pero no hay audio o se corta
 
 Comprueba modelo Piper, su JSON, soporte de códec y puertos RTP/RTCP. Con NAT,

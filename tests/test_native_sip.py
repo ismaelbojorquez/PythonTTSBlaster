@@ -42,9 +42,68 @@ def frequency_power(samples, rate, frequency):
     return real * real + imag * imag
 
 
-async def test_native_amd_concurrent_human_beep_and_silence(tmp_path):
+async def test_native_immediate_480_preserves_response_before_leg_is_closed(tmp_path, caplog):
+    import logging
+
+    peer_port = free_port()
+    settings = Settings(sip=SIPSettings(
+        domain=f"127.0.0.1:{peer_port}", username="blaster",
+        registration_enabled=False, bind_address="127.0.0.1", local_port=free_port(),
+        rtp_port=18000,
+    ))
+    driver = PJSUATelephony(settings)
+    evidence = []
+    driver.on_leg = lambda leg: setattr(leg, "observer", evidence.append)
+    caplog.set_level(logging.INFO, logger="blaster.telephony.pjsua")
+    with (tmp_path / "peer.log").open("w") as logfile:
+        peer = subprocess.Popen(
+            [sys.executable, str(Path(__file__).with_name("sip_peer.py")),
+             str(tmp_path), str(peer_port)], stdout=logfile, stderr=subprocess.STDOUT,
+        )
+        try:
+            await until(lambda: (tmp_path / "ready").exists() or peer.poll() is not None)
+            assert peer.poll() is None, (tmp_path / "peer.log").read_text()
+            await driver.start()
+            for number in ("480", "4800"):
+                evidence.clear()
+                leg = await driver.dial(number, "customer")
+                with pytest.raises(CallEnded) as error:
+                    await leg.wait_ready(5)
+                assert error.value.code == 480
+                responses = [e for e in evidence if e.kind == "response" and e.data["code"] == 480]
+                assert len(responses) == 1
+                response = responses[0]
+                assert response.data["reason_causes"] == (
+                    [{"protocol": "Q.850", "cause": 20}] if number == "480" else []
+                )
+                assert response.data["retry_after"] == (120 if number == "480" else 0)
+                assert response.data["source"] == f"127.0.0.1:{peer_port}"
+                invite = next(event for event in evidence if event.kind == "invite_sent")
+                assert invite.data["target_uri"] == f"sip:{number}@127.0.0.1:{peer_port}"
+                assert invite.data["from_uri"] == f"sip:blaster@127.0.0.1:{peer_port}"
+                assert evidence.index(response) < next(
+                    i for i, event in enumerate(evidence) if event.kind == "closed"
+                )
+                assert not leg.ready.is_set()
+                assert driver.available  # A destination rejection does not unregister the trunk.
+                assert leg.id not in driver.legs
+            assert "Reason=Q.850 causa=20" in caplog.text
+            assert "Reason=no informado" in caplog.text
+        finally:
+            await driver.stop()
+            (tmp_path / "stop").touch()
+            try:
+                await asyncio.to_thread(peer.wait, 5)
+            except subprocess.TimeoutExpired:
+                peer.kill()
+                await asyncio.to_thread(peer.wait)
+
+
+@pytest.mark.parametrize("calibrated", [False, True])
+async def test_native_amd_concurrent_human_beep_and_silence(tmp_path, calibrated):
     from amd_samples import signal, silence
 
+    from blaster.config import load_settings
     from blaster.engine import Engine
     from blaster.models import CampaignInput, Contact
     from blaster.store import Store
@@ -52,7 +111,7 @@ async def test_native_amd_concurrent_human_beep_and_silence(tmp_path):
 
     # Artificial sources exercise the entire SIP/PCMU/capture/decision/campaign path.
     for number, pcm in {
-        "110": silence(400) + signal(400) + silence(3000),
+        "110": silence(400) + signal(2800 if calibrated else 400) + silence(3000),
         "111": silence(400) + signal(1000, (1000,)),
         "112": silence(4000),
     }.items():
@@ -68,7 +127,8 @@ async def test_native_amd_concurrent_human_beep_and_silence(tmp_path):
         calls_per_second=20,
         choice_timeout=0.05,
         max_call_seconds=12,
-        amd=AMDSettings(enabled=True),
+        amd=(load_settings(Path(__file__).resolve().parents[1] / "config.example.toml").amd
+             if calibrated else AMDSettings(enabled=True)),
         sip=SIPSettings(
             domain=f"127.0.0.1:{peer_port}",
             username="blaster",
@@ -110,7 +170,8 @@ async def test_native_amd_concurrent_human_beep_and_silence(tmp_path):
                     template="Prueba {nombre}",
                     agent_number="200",
                     contacts=[
-                        Contact(phone=n, variables={"nombre": n}) for n in ("110", "111", "112")
+                        Contact(phone=n, credit_id=f"CRED-{n}", variables={"nombre": n})
+                        for n in ("110", "111", "112")
                     ],
                 ),
                 mode="sip",
@@ -326,7 +387,7 @@ async def test_native_piper_wait_repeat_and_agent_flow(tmp_path):
                 name="Voz local",
                 template="Hola. Esta es una prueba de voz personalizada.",
                 agent_number="200",
-                contacts=[Contact(phone="100")],
+                contacts=[Contact(phone="100", credit_id="CRED-100")],
             ),
             mode="sip",
         )

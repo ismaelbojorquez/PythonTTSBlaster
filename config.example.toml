@@ -1,7 +1,7 @@
-# Copia a config.toml. El panel se sirve sólo en 127.0.0.1.
+# Copia a config.toml. Abre el panel en http://localhost:8765.
 mode = "simulation" # "sip" para la troncal real
 web_port = 8765 # puerto del panel en http://127.0.0.1:8765
-web_public_url = "" # URL que ya publica cloudflared; vacío conserva el acceso local
+web_public_url = "" # acceso local por HTTP, sin dominio
 data_dir = "data"
 reporting_timezone = "America/Mexico_City"
 report_max_rows = 20000
@@ -20,20 +20,21 @@ routing = "priority"
 
 [amd]
 enabled = true # análisis local por señales, sin IA; sólo en la llamada al contacto
-unknown_action = "hangup" # "continue" permite seguir cuando no se puede clasificar
-total_analysis_ms = 5000 # plazo máximo desde que comienza la captura
-initial_silence_ms = 2500 # sin saludo: INCIERTO (no implica que sea buzón)
-after_greeting_silence_ms = 1000 # pausa tras saludo breve: humano probable
-greeting_speech_ms = 2400 # voz acumulada larga: buzón probable
-minimum_word_ms = 100 # duración mínima de un segmento de voz
-between_words_silence_ms = 100
-maximum_words = 5 # segmentos acústicos, no palabras reconocidas
+unknown_action = "continue" # sólo se cuelga con evidencia de buzón; los inciertos continúan
+total_analysis_ms = 5000 # máximo estricto; termina antes cuando hay evidencia suficiente
+initial_silence_ms = 3500 # margen para quien tarda en saludar; silencio sigue siendo INCIERTO
+after_greeting_silence_ms = 1400 # no confundir tan pronto una pausa del buzón con humano
+greeting_speech_ms = 3200 # permite saludos humanos más largos
+minimum_word_ms = 140 # descarta ráfagas/clics más cortos
+minimum_human_speech_ms = 200 # voz válida acumulada mínima antes de aceptar humano
+between_words_silence_ms = 200 # evita contar pausas muy cortas como segmentos distintos
+maximum_words = 6 # segmentos acústicos, no palabras reconocidas
 silence_threshold = 256 # RMS del PCM de 16 bits; aumentar si hay mucho ruido
 beep_enabled = true
-beep_min_ms = 240 # tono estable; no espera a que termine el saludo del buzón
+beep_min_ms = 360 # exige un tono sostenido; un tono corto no cuenta como saludo humano
 beep_min_hz = 600
 beep_max_hz = 2000
-beep_purity = 0.90
+beep_purity = 0.92
 beep_frequency_tolerance_hz = 35
 
 [sip]
@@ -45,7 +46,7 @@ caller_id = "" # vacío usa username; el proveedor debe autorizar este número
 registrar = "sip:sip.proveedor.example"
 proxy = "" # ej. "sip:sbc.proveedor.example;lr"
 registration_enabled = true # false para troncal autenticada por IP
-dial_format = "as_entered" # "mexico_52": 52 + 10 dígitos, sin +, para contacto y agente
+dial_format = "as_entered" # la campaña agrega el prefijo del país; "mexico_52" limita a México
 transport = "udp" # "udp" o "tcp"; TLS/SRTP fuera del alcance inicial
 bind_address = "0.0.0.0"
 local_port = 5060

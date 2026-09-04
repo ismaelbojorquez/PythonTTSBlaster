@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 from datetime import UTC, datetime, time, timedelta
 from uuid import uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from blaster.analytics import Filters
 from blaster.reports import cdr_csv, excel_report
@@ -21,8 +21,25 @@ def local_instant(value, timezone):
     if aware.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != parsed:
         raise ValueError("Esta hora no existe por un cambio de horario")
     if aware.utcoffset() != parsed.replace(tzinfo=zone, fold=1).utcoffset():
-        raise ValueError("Hora ambigua: indica una fecha ISO con desplazamiento UTC")
+        raise ValueError(
+            "Hora ambigua: esa hora se repite por el cambio de horario. "
+            "Elige otra hora o selecciona UTC e indica su hora equivalente."
+        )
     return aware.astimezone(UTC)
+
+
+def campaign_due_at(value: str, timezone: str) -> datetime:
+    if not value or not timezone:
+        raise ValueError("Indica fecha, hora y zona horaria para programar la campaña")
+    try:
+        due = local_instant(value, timezone)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("Zona horaria inválida; usa una zona como America/Mexico_City") from error
+    except ValueError as error:
+        raise ValueError(f"Fecha u hora inválida: {error}") from error
+    if due <= datetime.now(UTC):
+        raise ValueError("Elige una fecha y hora futuras")
+    return due
 
 
 def next_report(row, after=None):

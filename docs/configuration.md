@@ -1,8 +1,8 @@
 # Configuración
 
-La configuración y sus secretos se guardan en TOML. El despliegue utiliza
-`/etc/pythonblastertts/config.toml`; el desarrollo utiliza `config.toml` junto al
-repositorio. No se leen contraseñas desde `.env`.
+La configuración y sus secretos se guardan en `config.toml` junto al repositorio
+para la ejecución local. El despliegue opcional en Ubuntu utiliza
+`/etc/pythonblastertts/config.toml`. No se leen contraseñas desde `.env`.
 
 La referencia completa de campos está en [config.example.toml](../config.example.toml).
 La [plantilla de producción](../deploy/config.example.toml) utiliza rutas de
@@ -15,7 +15,7 @@ no deben pegarse creando secciones duplicadas.
 |---|---|
 | `mode` | `simulation` para pruebas; `sip` para telefonía real |
 | `web_port` | Puerto HTTP local, predeterminado 8765 |
-| `web_public_url` | Origen externo exacto, por ejemplo `https://tts.example.com` |
+| `web_public_url` | Vacío (`""`) para entrar por `http://localhost:8765` |
 | `data_dir` | SQLite, archivos temporales, grabaciones y reportes |
 | `reporting_timezone` | Zona IANA para presentar fechas; la base conserva UTC |
 | `report_max_rows` | Límite por exportación; reduce el período si se excede |
@@ -27,7 +27,8 @@ Los campos raíz se escriben antes de cualquier `[seccion]`. Las rutas relativas
 se resuelven junto al TOML. El servicio suministrado requiere los datos en
 `/var/lib/pythonblastertts` y la voz dentro de su carpeta `voices`.
 
-`web_public_url` no admite rutas, credenciales, comodines ni parámetros. Debe
+En la ejecución local, conserva `web_public_url = ""`. Si se configura un origen
+externo en un despliegue de servidor, no admite rutas, credenciales, comodines ni parámetros. Debe
 coincidir con el origen del navegador. Un esquema externo `https` marca las
 cookies como Secure, pero no habilita HTTPS en Uvicorn. En desarrollo local puede
 estar vacío; el servicio de producción exige un valor y autenticación activa.
@@ -58,7 +59,7 @@ No se necesita una segunda troncal para operar.
 | `public_address` | IP pública anunciada si hay NAT estático |
 | `rtp_port` | Inicio par del rango de medios UDP |
 | `rtp_port_range` | Amplitud del rango; al menos dos puertos por canal |
-| `dial_format` | `as_entered` o `mexico_52`, según el proveedor |
+| `dial_format` | `as_entered` para países de la campaña; `mexico_52` limita a México |
 
 Una cadena de Asterisk como `register => usuario:clave@servidor:5060/usuario`
 se traduce a `username`, `password`, `domain` y `registrar`. El sufijo de contacto
@@ -77,10 +78,32 @@ al editar una troncal, el campo vacío conserva la contraseña existente.
 
 ## Marcación
 
-La captura elimina `+`, espacios, paréntesis y guiones del teléfono del contacto
-y del agente. `as_entered` no agrega prefijos. `mexico_52` normaliza a 52 más los
-10 dígitos nacionales, sin `+`. No se agrega un prefijo de salida de una central.
-Las identidades y el formato deben estar autorizados por el proveedor.
+En una campaña nueva se capturan números nacionales y se selecciona su país;
+México es el valor predeterminado. El agente puede tener otro país. La conversión
+local agrega el código internacional y guarda sólo dígitos antes de programar o
+iniciar llamadas. Conserva las reglas de prefijos nacionales de cada país.
+
+Usa `dial_format = "as_entered"` en las troncales para enviar esos números completos
+sin modificaciones. El modo anterior `mexico_52` sigue disponible para troncales
+limitadas a México, pero rechazará números de otros países, incluso al validar
+una campaña si esa troncal está habilitada. Para usar varios países, cambia a
+`as_entered` las troncales habilitadas en **Operación → Troncales**. No se agrega un
+prefijo de salida de una central. El proveedor debe admitir los destinos y Caller ID.
+
+El país de cada campaña nueva y el del agente se guardan en SQLite. Al actualizar
+una base con campañas o plantillas se crea una copia `*.before-countries-*.bak`
+antes de ampliar el esquema. Los números históricos no se reescriben ni reciben
+un país supuesto. Todos los datos y la copia permanecen en `data_dir`.
+
+El pool de transferencia se configura en cada campaña o plantilla: números,
+país, estrategia `round_robin`/`random`/`priority` y `agent_pool_wait` (0–300 s,
+30 por defecto). Esos valores se guardan en SQLite, junto con la posición de
+rotación de cada campaña. La capacidad es de una reserva por teléfono. La
+migración crea `*.before-agent-pool-*.bak` cuando ya hay campañas o plantillas;
+los destinos anteriores pasan a ser pools de un número sin reescribirse.
+
+`agent_timeout` del TOML sigue siendo el límite de timbrado del agente elegido.
+El tiempo para obtener un teléfono libre se controla por separado en el pool.
 
 ## Capacidad y tiempos
 
@@ -200,3 +223,12 @@ sudo journalctl -u blaster -n 60 --no-pager
 En desarrollo, valida con `.venv/bin/python run.py --config config.toml --check`.
 En producción, el servicio ejecuta su comprobación antes de iniciar. La
 [guía de administración](production.md) documenta una comprobación manual.
+
+
+### Reintentos de campaña
+
+El máximo de intentos, intervalo y resultados elegibles se configuran en el
+creador de campaña o en su borrador; se guardan en SQLite junto a esa campaña.
+No cambian la troncal ni las credenciales del TOML. Consulta
+[Reintentos automáticos por contacto](usage.md#reintentos-automáticos-por-contacto)
+para límites, pausa, recuperación y auditoría.

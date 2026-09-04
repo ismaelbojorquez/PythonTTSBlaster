@@ -51,6 +51,7 @@ stateDiagram-v2
     detecting --> amd_unknown: incierto / colgar
     dialing --> busy: 486 / 600
     dialing --> no_answer: timeout / 408 / 480
+    dialing --> temporary_error: 500 / 502 / 503 / 504
     synthesizing --> playing
     playing --> menu: fin del WAV
     playing --> playing: DTMF 1
@@ -66,22 +67,30 @@ stateDiagram-v2
 Cancelación, cierre del proceso, errores y duración máxima pueden finalizar una
 sesión desde otros estados. Cada transición persiste un evento. La cancelación
 recoge las tareas auxiliares, detiene reproductores y cuelga ambos extremos.
-Un fallo no provoca remarcación automática; una recuperación tampoco reorigina
-llamadas cuyo resultado se desconoce.
+Los resultados configurados pueden crear un nuevo trabajo de reintento, con CDR e
+ID propios y el mismo Credito/Telefono. Una recuperación no reorigina llamadas
+cuyo resultado o cierre se desconoce.
 
 ## Telemetría analítica y CDR
 
 `call_records` contiene una fila por sesión iniciada, `call_legs` separa el tramo
 cliente y el tramo agente, y `call_events` conserva la cronología estructurada.
 Las tablas originales `jobs` y `events` siguen siendo el estado operativo y su
-historial legible. La migración es aditiva (`PRAGMA user_version=2`) y deja en
-NULL cualquier medida que no pudo observar.
+historial legible. El esquema actual es `PRAGMA user_version=7`: la migración de
+trazabilidad añade `credit_id` e índices por crédito y teléfono. Las filas previas
+conservan Crédito vacío y cualquier medida no observada permanece NULL.
 
 Los callbacks de PJSUA2 producen eventos pequeños y los entregan al bucle asyncio;
 no escriben SQLite ni procesan informes en el hilo de medios. La respuesta y la
 terminación se derivan de estados/transacciones SIP. Los reportes abren una conexión
 SQLite de sólo lectura, fijan una instantánea y se generan con `asyncio.to_thread`.
 El audio de AMD continúa siendo efímero y no entra a la base ni a los reportes.
+
+El pool reserva un destino antes de marcar al agente y despierta al planificador
+en cada cambio. Si la campaña activa tiene cero destinos libres, el planificador
+no reclama nuevos trabajos de contacto. La liberación sólo ocurre después de la
+confirmación de cierre SIP; entonces se levanta la pausa de capacidad y vuelve a
+evaluarse concurrencia, canales, CPS y rutas antes de originar la siguiente llamada.
 
 El actor remoto se etiqueta con el rol del tramo. Un BYE del tramo cliente produce
 `customer`; un BYE del tramo agente produce `agent`. Cuando PJSIP sólo informa una
@@ -90,8 +99,8 @@ timeouts y políticas AMD se atribuyen al operador o al sistema con su evidencia
 
 ## Límites y siguientes ampliaciones
 
-Esta versión cubre hasta ocho cuentas/troncales, una campaña activa y un número de
-agente por campaña. No distribuye llamadas entre varias máquinas. Incluye roles,
+Esta versión cubre hasta ocho cuentas/troncales, una campaña activa y un pool de
+teléfonos de agente por campaña. No distribuye llamadas entre varias máquinas. Incluye roles,
 programación local persistente y grabación compacta desde evidencia humana. El AMD local
 analiza al contacto antes del TTS; no analiza la llamada al agente. Véase
 [el alcance y las limitaciones de AMD](amd.md).
@@ -115,6 +124,12 @@ sesiones, auditoría, plantillas, agenda, reportes, alertas y referencias de aud
 `security.py` valida sesiones con tokens opacos (sólo su hash en BD), scrypt y
 caducidad. El middleware verifica cada API; no se confía en controles ocultos del
 navegador. Las mutaciones quedan auditadas sin cuerpo ni secretos.
+
+`traceability.py` migra el identificador de crédito y construye paquetes ZIP en un
+archivo temporal con permisos privados. El XLSX y el manifiesto incluyen todas las
+llamadas del corte; sólo se agregan audios cuyo nombre, ruta y estado coinciden con
+el trabajo. Ogg se copia sin recomprimir y el temporal se elimina al terminar la
+respuesta. La API limita el corte con `report_max_rows` y registra cada descarga.
 
 `TrunkRouter` reserva dos canales por sesión en una ruta y selecciona por prioridad
 con reparto equilibrado o ponderado entre iguales. PJSUA2 mantiene múltiples

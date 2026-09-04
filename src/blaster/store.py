@@ -7,10 +7,24 @@ from pathlib import Path
 from uuid import uuid4
 
 from blaster.models import TERMINAL, CampaignInput, render_message
+from blaster.retries import RetryPolicy
+
+LATEST_JOB = "NOT EXISTS (SELECT 1 FROM jobs newer WHERE newer.contact_id=j.contact_id " \
+    "AND newer.attempt_number>j.attempt_number)"
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def agent_settings(row) -> dict:
+    item = dict(row)
+    item["agent_numbers"] = json.loads(item["agent_numbers"]) or (
+        [item["agent_number"]] if item["agent_number"] else []
+    )
+    if "retry_policy" in item:
+        item["retry_policy"] = RetryPolicy.model_validate_json(item["retry_policy"]).model_dump()
+    return item
 
 
 class Store:
@@ -44,9 +58,74 @@ class Store:
         from blaster.operations import migrate
 
         migrate(self.db, path)
+        self._migrate_countries(path)
+        self._migrate_agent_pool(path)
+        from blaster.campaign_history import CampaignHistory
+        from blaster.campaign_history import migrate as migrate_executions
+
+        migrate_executions(self.db, path)
+        self.history = CampaignHistory(self)
+        from blaster.retries import Retries
+        from blaster.retries import migrate as migrate_retries
+
+        migrate_retries(self.db, path)
+        self.retries = Retries(self)
+        from blaster.traceability import migrate as migrate_traceability
+
+        migrate_traceability(self.db, path)
+
+    def _migrate_agent_pool(self, path: Path) -> None:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] >= 4:
+            return
+        if (
+            self.db.execute("SELECT 1 FROM campaigns LIMIT 1").fetchone()
+            or self.db.execute("SELECT 1 FROM templates LIMIT 1").fetchone()
+        ):
+            backup = path.with_name(f"{path.name}.before-agent-pool-{uuid4().hex[:8]}.bak")
+            with sqlite3.connect(backup) as target:
+                self.db.backup(target)
+            backup.chmod(0o600)
+        with self.db:
+            self.db.execute("BEGIN")
+            for table in ("campaigns", "templates"):
+                self.db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_numbers TEXT NOT NULL DEFAULT '[]'"
+                )
+                self.db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_strategy TEXT "
+                    "NOT NULL DEFAULT 'round_robin'"
+                )
+                self.db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_pool_wait REAL NOT NULL DEFAULT 30"
+                )
+            self.db.execute(
+                "ALTER TABLE campaigns ADD COLUMN agent_cursor INTEGER NOT NULL DEFAULT 0"
+            )
+            self.db.execute("ALTER TABLE call_records ADD COLUMN agent_selected_number TEXT")
+            self.db.execute("ALTER TABLE call_records ADD COLUMN agent_strategy TEXT")
+            self.db.execute("ALTER TABLE call_records ADD COLUMN agent_pool_wait_seconds REAL")
+            self.db.execute("PRAGMA user_version=4")
+
+    def _migrate_countries(self, path: Path) -> None:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] >= 3:
+            return
+        if (
+            self.db.execute("SELECT 1 FROM campaigns LIMIT 1").fetchone()
+            or self.db.execute("SELECT 1 FROM templates LIMIT 1").fetchone()
+        ):
+            backup = path.with_name(f"{path.name}.before-countries-{uuid4().hex[:8]}.bak")
+            with sqlite3.connect(backup) as target:
+                self.db.backup(target)
+            backup.chmod(0o600)
+        with self.db:
+            self.db.execute("BEGIN")
+            self.db.execute("ALTER TABLE campaigns ADD COLUMN country TEXT")
+            self.db.execute("ALTER TABLE campaigns ADD COLUMN agent_country TEXT")
+            self.db.execute("ALTER TABLE templates ADD COLUMN agent_country TEXT")
+            self.db.execute("PRAGMA user_version=3")
 
     def _migrate_analytics(self, path: Path) -> None:
-        if self.db.execute("PRAGMA user_version").fetchone()[0] > 2:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] > 7:
             raise RuntimeError("La base requiere una versión más reciente de Blaster")
         if self.db.execute("PRAGMA user_version").fetchone()[0] >= 2:
             return
@@ -161,12 +240,18 @@ class Store:
                 (now(),),
             )
             self.db.execute("UPDATE campaigns SET status='paused' WHERE status='running'")
+        self.retries.reconcile()
 
-    def create_campaign(self, payload: CampaignInput, mode: str = "simulation") -> str:
+    def create_campaign(
+        self, payload: CampaignInput, mode: str = "simulation", *, schedule: dict | None = None
+    ) -> str:
         cid, timestamp = uuid4().hex, now()
         with self.db:
             self.db.execute(
-                "INSERT INTO campaigns VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO campaigns "
+                "(id,name,template,agent_number,status,created_at,mode,country,agent_country,"
+                "agent_numbers,agent_strategy,agent_pool_wait,retry_policy) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     cid,
                     payload.name,
@@ -175,38 +260,66 @@ class Store:
                     "draft",
                     timestamp,
                     mode,
+                    payload.country,
+                    payload.agent_country,
+                    json.dumps(payload.agent_numbers),
+                    payload.agent_strategy,
+                    payload.agent_pool_wait,
+                    payload.retry_policy.model_dump_json(),
                 ),
             )
             self.db.executemany(
                 """
-                INSERT INTO jobs (id,campaign_id,phone,variables,message,status,updated_at)
-                VALUES (?,?,?,?,?,'queued',?)
+                INSERT INTO jobs
+                (id,campaign_id,phone,credit_id,variables,message,status,updated_at)
+                VALUES (?,?,?,?,?,?,'queued',?)
             """,
                 [
                     (
                         uuid4().hex,
                         cid,
                         c.phone,
+                        c.credit_id,
                         json.dumps(c.variables, ensure_ascii=False),
-                        render_message(payload.template, {**c.variables, "telefono": c.phone}),
+                        render_message(
+                            payload.template,
+                            {**c.variables, "telefono": c.phone, "credito": c.credit_id},
+                        ),
                         timestamp,
                     )
                     for c in payload.contacts
                 ],
             )
+            if schedule:
+                self.db.execute(
+                    "INSERT INTO campaign_schedules "
+                    "(id,campaign_id,due_at,timezone,created_by,created_at) VALUES(?,?,?,?,?,?)",
+                    (uuid4().hex, cid, schedule["due_at"], schedule["timezone"],
+                     schedule.get("created_by"), timestamp),
+                )
         return cid
 
     def campaigns(self) -> list[dict]:
         result = []
         for row in self.db.execute("SELECT * FROM campaigns ORDER BY created_at DESC"):
-            campaign = dict(row)
+            campaign = agent_settings(row)
             campaign["counts"] = dict(
                 self.db.execute(
-                    "SELECT status, COUNT(*) FROM jobs WHERE campaign_id=? GROUP BY status",
+                    f"SELECT status, COUNT(*) FROM jobs j WHERE campaign_id=? "
+                    f"AND {LATEST_JOB} GROUP BY status",
                     (campaign["id"],),
                 ).fetchall()
             )
             campaign["total"] = sum(campaign["counts"].values())
+            campaign["retry_summary"] = dict(self.db.execute(
+                "SELECT COUNT(CASE WHEN started_at IS NOT NULL THEN 1 END) AS attempts,"
+                "COUNT(CASE WHEN status='queued' AND attempt_number>1 THEN 1 END) AS pending,"
+                "MIN(CASE WHEN status='queued' AND attempt_number>1 THEN available_at END) "
+                "AS next_at FROM jobs WHERE campaign_id=?", (campaign["id"],),
+            ).fetchone())
+            campaign["schedule"] = self.pending_schedule(campaign["id"])
+            campaign["display_status"] = "scheduled" if campaign["schedule"] else campaign["status"]
+            campaign["lineage"] = self.history.lineage(campaign["id"])
             result.append(campaign)
         return result
 
@@ -214,25 +327,45 @@ class Store:
         row = self.db.execute("SELECT * FROM campaigns WHERE id=?", (cid,)).fetchone()
         if row is None:
             raise KeyError("Campaña no encontrada")
-        return dict(row)
+        return agent_settings(row)
+
+    def pending_schedule(self, cid: str) -> dict | None:
+        row = self.db.execute(
+            "SELECT id,due_at,timezone,state FROM campaign_schedules "
+            "WHERE campaign_id=? AND state='pending'", (cid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_agent_cursor(self, cid: str, cursor: int):
+        with self.db:
+            self.db.execute("UPDATE campaigns SET agent_cursor=? WHERE id=?", (cursor, cid))
 
     def set_campaign_status(self, cid: str, status: str) -> None:
         with self.db:
             self.db.execute("UPDATE campaigns SET status=? WHERE id=?", (status, cid))
 
-    def jobs(self, cid: str, limit: int = 200, offset: int = 0) -> list[dict]:
+    def jobs(self, cid: str, limit: int = 200, offset: int = 0, *, latest=True) -> list[dict]:
         rows = self.db.execute(
-            "SELECT * FROM jobs WHERE campaign_id=? ORDER BY rowid LIMIT ? OFFSET ?",
+            "SELECT j.* FROM jobs j WHERE campaign_id=? "
+            + (f"AND {LATEST_JOB} " if latest else "")
+            + "ORDER BY (SELECT rowid FROM jobs root WHERE root.id=j.contact_id),"
+            "attempt_number LIMIT ? OFFSET ?",
             (cid, limit, offset),
         )
         return [{**dict(row), "variables": json.loads(row["variables"])} for row in rows]
 
     def next_queued(self, cid: str) -> dict | None:
         row = self.db.execute(
-            "SELECT * FROM jobs WHERE campaign_id=? AND status='queued' ORDER BY rowid LIMIT 1",
-            (cid,),
+            "SELECT * FROM jobs WHERE campaign_id=? AND status='queued' "
+            "AND (available_at IS NULL OR available_at<=?) "
+            "ORDER BY COALESCE(available_at,updated_at),rowid LIMIT 1", (cid, now()),
         ).fetchone()
         return dict(row) if row else None
+
+    def has_queued(self, cid: str) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM jobs WHERE campaign_id=? AND status='queued' LIMIT 1", (cid,),
+        ).fetchone() is not None
 
     def queued_numbers(self, cid: str) -> list[str]:
         return [
@@ -241,6 +374,13 @@ class Store:
                 "SELECT phone FROM jobs WHERE campaign_id=? AND status='queued'", (cid,)
             )
         ]
+
+    def missing_identifiers(self, cid: str) -> int:
+        return self.db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE campaign_id=? "
+            "AND (TRIM(phone)='' OR TRIM(credit_id)='')",
+            (cid,),
+        ).fetchone()[0]
 
     def transition(self, jid: str, status: str, detail: str = "") -> None:
         timestamp = now()
@@ -269,6 +409,21 @@ class Store:
 
     def cancel_queued(self, cid: str) -> None:
         with self.db:
+            pending = self.db.execute(
+                "SELECT id,contact_id,attempt_number FROM jobs "
+                "WHERE campaign_id=? AND status='queued' AND attempt_number>1", (cid,),
+            ).fetchall()
+            for job in pending:
+                self.db.execute(
+                    "INSERT INTO events(job_id,status,detail,created_at) "
+                    "VALUES(?,'cancelled','Reintento cancelado: campaña detenida',?)",
+                    (job["id"], now()),
+                )
+                self.db.execute(
+                    "INSERT INTO audit(created_at,actor_name,action,target,detail) "
+                    "VALUES(?,'sistema','call.retry_cancelled',?,?)",
+                    (now(), job["id"], json.dumps({"campaign_id": cid, **dict(job)})),
+                )
             self.db.execute(
                 """
                 UPDATE jobs SET status='cancelled',detail='Campaña detenida',ended_at=?,

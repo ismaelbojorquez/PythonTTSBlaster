@@ -57,12 +57,13 @@ class AMDSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False  # Existing configurations keep their previous call flow.
-    unknown_action: Literal["hangup", "continue"] = "hangup"
+    unknown_action: Literal["hangup", "continue"] = "continue"
     total_analysis_ms: int = Field(default=5000, ge=1000, le=15000)
     initial_silence_ms: int = Field(default=2500, ge=500, le=10000)
     after_greeting_silence_ms: int = Field(default=1000, ge=300, le=3000)
     greeting_speech_ms: int = Field(default=2400, ge=500, le=10000)
     minimum_word_ms: int = Field(default=100, ge=40, le=500)
+    minimum_human_speech_ms: int = Field(default=200, ge=40, le=2000)
     between_words_silence_ms: int = Field(default=100, ge=40, le=500)
     maximum_words: int = Field(default=5, ge=2, le=20)
     silence_threshold: int = Field(default=256, ge=32, le=5000)
@@ -79,6 +80,10 @@ class AMDSettings(BaseModel):
             raise ValueError("Los límites de silencio/saludo AMD deben caber en total_analysis_ms")
         if self.minimum_word_ms + self.after_greeting_silence_ms > self.total_analysis_ms:
             raise ValueError("El saludo y su pausa AMD deben caber en total_analysis_ms")
+        if max(self.minimum_word_ms, self.minimum_human_speech_ms) >= self.greeting_speech_ms:
+            raise ValueError("La voz mínima humana debe ser menor que el saludo de buzón AMD")
+        if self.minimum_human_speech_ms + self.after_greeting_silence_ms > self.total_analysis_ms:
+            raise ValueError("La voz mínima humana y su pausa deben caber en total_analysis_ms")
         if self.between_words_silence_ms >= self.after_greeting_silence_ms:
             raise ValueError("La pausa entre palabras AMD debe ser menor que la pausa final")
         if self.beep_min_hz >= self.beep_max_hz:

@@ -1,5 +1,8 @@
 # Instalación desde cero en Ubuntu
 
+Para ejecutar desde la carpeta del proyecto en macOS, utiliza la
+[guía local](docs/local.md). Este despliegue en servidor es opcional.
+
 Esta guía lleva un servidor Ubuntu hasta una instalación ejecutándose con
 systemd. El panel sirve **HTTP en `127.0.0.1:8765`**. El acceso público utiliza
 un túnel o proxy administrado por el operador. El instalador no instala HTTPS,

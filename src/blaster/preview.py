@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 from pydantic import BaseModel, Field
 
+from blaster.countries import country_code
 from blaster.models import MENU, MissingTemplateVariable, parse_contacts, render_message
 from blaster.tts import PiperSpeech
 
@@ -16,10 +17,16 @@ from blaster.tts import PiperSpeech
 class AudioPreviewInput(BaseModel):
     template: str = Field(min_length=1, max_length=4000)
     csv_text: str = Field(default="", max_length=8_000_000)
+    country: str = "MX"
 
     def sample(self):
-        contact = parse_contacts(self.csv_text)[0] if self.csv_text.strip() else None
-        variables = {**contact.variables, "telefono": contact.phone} if contact else {}
+        region = country_code(self.country)
+        contact = parse_contacts(self.csv_text, region)[0] if self.csv_text.strip() else None
+        variables = (
+            {**contact.variables, "telefono": contact.phone, "credito": contact.credit_id}
+            if contact
+            else {}
+        )
         try:
             message = render_message(self.template, variables)
         except MissingTemplateVariable as error:

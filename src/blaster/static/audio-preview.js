@@ -25,15 +25,17 @@ export function installAudioPreview({api}) {
     if(["message","contacts"].includes(event.target.id)) changed();
   });
   $("#template-picker").addEventListener("change", changed);
+  $("#country").addEventListener("change", changed);
   $("#campaign-form").addEventListener("reset", clear);
   window.addEventListener("pagehide", clear);
   button.addEventListener("click", async () => {
     if(!$("#message").reportValidity()) return;
+    if($("#contacts").validity.customError && !$("#contacts").reportValidity()) return;
     clear(); const current = revision;
     pending = true; button.disabled = true; button.textContent = "Generando audio…";
     status.textContent = "Preparando la voz local. La primera muestra puede tardar un poco más.";
     try {
-      const data = await api("/api/preview/audio", {template:$("#message").value,csv_text:$("#contacts").value});
+      const data = await api("/api/preview/audio", {template:$("#message").value,csv_text:$("#contacts").value,country:$("#country").value});
       if(current !== revision) return;
       const bytes = Uint8Array.from(atob(data.audio_base64), char => char.charCodeAt(0));
       url = URL.createObjectURL(new Blob([bytes], {type:"audio/wav"}));

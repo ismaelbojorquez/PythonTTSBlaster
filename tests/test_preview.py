@@ -38,7 +38,10 @@ def test_preview_uses_first_contact_menu_and_real_voice_path_without_creating_ca
             "/api/preview/audio",
             json={
                 "template": "Hola {nombre}, tu número es {telefono}.",
-                "csv_text": "telefono,nombre\n+525550000101,Ana\n525550000102,Luis",
+                "csv_text": (
+                    "Credito,telefono,nombre\n"
+                    "PRE-1,+525550000101,Ana\nPRE-2,525550000102,Luis"
+                ),
             },
         )
         assert response.status_code == 200, response.text

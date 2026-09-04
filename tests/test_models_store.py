@@ -14,7 +14,8 @@ def test_templates_do_not_allow_expressions(text):
 
 
 def test_csv_and_template_validation():
-    rows = parse_contacts('\ufefftelefono,nombre\n+525500000000,"Ana, María"\n')
+    rows = parse_contacts('\ufeffCredito,telefono,nombre\nCRED-1,+525500000000,"Ana, María"\n')
+    assert rows[0].credit_id == "CRED-1"
     assert rows[0].variables["nombre"] == "Ana, María"
     assert rows[0].phone == "525500000000"
     assert (
@@ -25,10 +26,12 @@ def test_csv_and_template_validation():
         render_message("Hola {fecha}", rows[0].variables)
     for csv in [
         "nombre\nAna",
-        "telefono,nombre\n123",
-        "telefono,nombre\n123,Ana,extra",
-        "telefono,telefono\n123,456",
-        "telefono,nombre\n",
+        "telefono,nombre\n123,Ana",
+        "Credito,telefono,nombre\n,123,Ana",
+        "Credito,telefono,nombre\nCRED-1,123",
+        "Credito,telefono,nombre\nCRED-1,123,Ana,extra",
+        "Credito,telefono,telefono\nCRED-1,123,456",
+        "Credito,telefono,nombre\nCRED-1,,Ana",
     ]:
         with pytest.raises(ValueError):
             parse_contacts(csv)
@@ -38,8 +41,8 @@ def test_csv_and_template_validation():
 
 def test_number_cleanup_preserves_csv_variables_and_cleans_the_agent():
     contacts = parse_contacts(
-        '\ufeffnombre,"telefono",nota\r\n'
-        '"Ana + Luis","+52 (55) 0000-0101","A + B, \"\"confirmado\"\"\nmañana"\r\n'
+        '\ufeffCredito,nombre,"telefono",nota\r\n'
+        '"CRED-1","Ana + Luis","+52 (55) 0000-0101","A + B, \"\"confirmado\"\"\nmañana"\r\n'
     )
     campaign = CampaignInput(
         name="Prueba", template="Hola {nombre}, {telefono}",
@@ -48,7 +51,8 @@ def test_number_cleanup_preserves_csv_variables_and_cleans_the_agent():
     assert campaign.agent_number == "525500000102"
     assert contacts[0].phone == "525500000101"
     assert contacts[0].variables == {
-        "nombre": "Ana + Luis", "nota": 'A + B, "confirmado"\nmañana',
+        "Credito": "CRED-1", "nombre": "Ana + Luis",
+        "nota": 'A + B, "confirmado"\nmañana',
     }
     assert phone_number("525500000101") == "525500000101"
     assert phone_number("5500000101") == "5500000101"
@@ -64,7 +68,10 @@ def test_restart_marks_active_interrupted_and_keeps_queue(tmp_path):
             name="Prueba",
             template="Hola",
             agent_number="999",
-            contacts=[Contact(phone="123"), Contact(phone="456")],
+            contacts=[
+                Contact(phone="123", credit_id="CRED-123"),
+                Contact(phone="456", credit_id="CRED-456"),
+            ],
         )
     )
     store.set_campaign_status(cid, "running")

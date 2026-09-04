@@ -56,7 +56,10 @@ async def test_existing_campaign_is_validated_before_starting_any_calls(engine, 
             name="Cambio de formato de troncal",
             template="Hola",
             agent_number="123" if invalid_role == "agent" else "+525500000102",
-            contacts=[Contact(phone="123" if invalid_role == "customer" else "+525500000101")],
+            contacts=[Contact(
+                phone="123" if invalid_role == "customer" else "+525500000101",
+                credit_id="CRED-1",
+            )],
         ),
         mode="sip",
     )
@@ -73,11 +76,11 @@ def test_campaign_form_removes_plus_and_checks_the_agent():
         name="Prueba",
         template="Hola",
         agent_number="5500000102",
-        csv_text="telefono,nombre\n+525500000101,Ana",
+        csv_text="Credito,telefono,nombre\nDIAL-1,+525500000101,Ana",
     )
     campaign = form.campaign(settings)
     assert campaign.contacts[0].phone == "525500000101"
-    assert campaign.agent_number == "5500000102"
+    assert campaign.agent_number == "525500000102"
     form.agent_number = "+15550000102"
-    with pytest.raises(DialingError):
+    with pytest.raises(ValueError, match="país"):
         form.campaign(settings)

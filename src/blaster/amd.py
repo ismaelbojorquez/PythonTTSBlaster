@@ -20,6 +20,7 @@ RATE = 8000
 FRAME_MS = 20
 SAMPLES = RATE * FRAME_MS // 1000
 FRAME_BYTES = SAMPLES * 2
+DETECTOR_VERSION = "energy-timing-v2"
 
 REASONS = {
     "short_greeting": "saludo breve seguido de una pausa",
@@ -67,6 +68,7 @@ class Detector:
         self.pending = bytearray()
         self.audio_ms = self.voiced_ms = self.words = 0
         self.voice_run_ms = self.silence_ms = 0
+        self.last_voice_ms = 0
         self.word_counted = False
         self.previous = None
         self.beep_ms = 0
@@ -126,14 +128,24 @@ class Detector:
         voiced = float(np.sqrt(np.mean(samples * samples))) >= cfg.silence_threshold
         if self._tone(samples, voiced):
             return self.finish("machine", "beep")
+        # A pending single-frequency tone is not evidence of a human greeting.
+        # Keep listening until it qualifies as a beep or disappears.
+        tone_pending = self.beep_frequency is not None
+        voiced = voiced and not tone_pending
         if voiced:
             if self.silence_ms >= cfg.between_words_silence_ms:
                 self.voice_run_ms = 0
                 self.word_counted = False
             self.silence_ms = 0
             self.voice_run_ms += FRAME_MS
-            self.voiced_ms += FRAME_MS
-            if self.voice_run_ms >= cfg.minimum_word_ms and not self.word_counted:
+            if self.word_counted:
+                self.voiced_ms += FRAME_MS
+                self.last_voice_ms = self.audio_ms
+            elif self.voice_run_ms >= cfg.minimum_word_ms:
+                # Commit only qualified speech. Discarded clicks must not push
+                # the next valid greeting over the machine duration threshold.
+                self.voiced_ms += self.voice_run_ms
+                self.last_voice_ms = self.audio_ms
                 self.words += 1
                 self.word_counted = True
             if self.words > cfg.maximum_words:
@@ -144,9 +156,14 @@ class Detector:
             self.silence_ms += FRAME_MS
             if not self.word_counted:
                 self.voice_run_ms = 0  # Separate clicks cannot form a valid word.
-            if self.words and self.silence_ms >= cfg.after_greeting_silence_ms:
+            if (
+                self.words
+                and self.voiced_ms >= cfg.minimum_human_speech_ms
+                and self.audio_ms - self.last_voice_ms >= cfg.after_greeting_silence_ms
+                and not tone_pending
+            ):
                 return self.finish("human", "short_greeting")
-        if not self.words and self.audio_ms >= cfg.initial_silence_ms:
+        if not self.words and self.audio_ms >= cfg.initial_silence_ms and not voiced:
             return self.finish("unknown", "initial_silence")
         if self.audio_ms >= cfg.total_analysis_ms:
             return self.finish("unknown", "analysis_timeout")

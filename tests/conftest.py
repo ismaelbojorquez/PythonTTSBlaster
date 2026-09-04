@@ -8,6 +8,20 @@ from blaster.telephony.simulated import SimulatedTelephony
 from blaster.tts import SimulatedSpeech
 
 
+def remove_retries_schema(db):
+    """Build a genuine pre-v6 database for migration tests."""
+    db.execute("DROP INDEX jobs_credit")
+    db.execute("DROP INDEX jobs_phone")
+    db.execute("ALTER TABLE jobs DROP COLUMN credit_id")
+    db.execute("DROP TABLE retry_decisions")
+    db.execute("DROP TRIGGER jobs_contact_root")
+    for name in ("jobs_contact_attempt", "jobs_retry_parent", "jobs_due"):
+        db.execute(f"DROP INDEX {name}")
+    for name in ("contact_id", "attempt_number", "retry_of", "available_at"):
+        db.execute(f"ALTER TABLE jobs DROP COLUMN {name}")
+    db.execute("ALTER TABLE campaigns DROP COLUMN retry_policy")
+
+
 @pytest.fixture
 async def engine(tmp_path):
     settings = Settings(
@@ -36,7 +50,11 @@ def campaign(engine, count=1, mode="simulation"):
             template="Hola {nombre}",
             agent_number="+525550009999",
             contacts=[
-                Contact(phone=f"+5255500001{i:02}", variables={"nombre": f"Persona {i}"})
+                Contact(
+                    phone=f"+5255500001{i:02}",
+                    credit_id=f"CRED-{i:03}",
+                    variables={"nombre": f"Persona {i}"},
+                )
                 for i in range(count)
             ],
         ),

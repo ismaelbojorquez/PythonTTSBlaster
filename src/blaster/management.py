@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sqlite3
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -17,12 +17,18 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from blaster.automation import local_instant, next_report
+from blaster.agent_pool import AgentStrategy
+from blaster.automation import campaign_due_at, next_report
 from blaster.config import AutomationSettings, RecordingSettings, Settings, TrunkSettings
-from blaster.models import render_message
+from blaster.countries import (
+    country_code,
+    national_display,
+    stored_number_country,
+)
+from blaster.models import render_message, template_variables, transfer_numbers
 from blaster.routing import TrunkRouter
 from blaster.security import Credentials, UserInput, password_hash, safe_user, verify
-from blaster.store import now
+from blaster.store import agent_settings, now
 
 
 class TemplateInput(BaseModel):
@@ -30,6 +36,10 @@ class TemplateInput(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     message: str = Field(min_length=1, max_length=4000)
     agent_number: str = ""
+    agent_country: str | None = None
+    agent_numbers_text: str = Field(default="", max_length=4000)
+    agent_strategy: AgentStrategy = "round_robin"
+    agent_pool_wait: float = Field(default=30, ge=0, le=300)
 
 
 class ScheduleInput(BaseModel):
@@ -331,25 +341,54 @@ def management_router():
 
     @router.get("/api/manage/templates")
     async def templates(request: Request):
-        return ops(request).rows("SELECT * FROM templates ORDER BY updated_at DESC")
+        rows = [
+            agent_settings(r)
+            for r in ops(request).rows("SELECT * FROM templates ORDER BY updated_at DESC")
+        ]
+        for row in rows:
+            row["agent_country"] = row["agent_country"] or stored_number_country(
+                row["agent_number"]
+            )
+            row["agent_national"] = (
+                national_display(row["agent_number"])
+                if row["agent_country"]
+                else row["agent_number"]
+            )
+            row["agent_numbers_national"] = [
+                national_display(n) if row["agent_country"] else n for n in row["agent_numbers"]
+            ]
+        return rows
 
     @router.post("/api/manage/templates")
     async def save_template(payload: TemplateInput, request: Request):
-        from string import Formatter
-
-        from blaster.models import phone_number
-
-        fields = {name for _, name, _, _ in Formatter().parse(payload.message) if name}
+        fields = template_variables(payload.message)
         render_message(payload.message, {k: "ejemplo" for k in fields})
-        agent = phone_number(payload.agent_number) if payload.agent_number else ""
+        region = country_code(payload.agent_country) if payload.agent_country else None
+        agents = transfer_numbers(payload.agent_numbers_text, payload.agent_number, region)
+        agent = agents[0] if agents else ""
         tid = payload.id or uuid4().hex
         with ops(request).db:
             ops(request).db.execute(
-                "INSERT INTO templates VALUES(?,?,?,?,?,?) "
+                "INSERT INTO templates "
+                "(id,name,message,agent_number,updated_at,updated_by,agent_country,"
+                "agent_numbers,agent_strategy,agent_pool_wait) VALUES(?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,message=excluded.message,"
                 "agent_number=excluded.agent_number,updated_at=excluded.updated_at,"
-                "updated_by=excluded.updated_by",
-                (tid, payload.name, payload.message, agent, now(), request.state.user["id"]),
+                "updated_by=excluded.updated_by,agent_country=excluded.agent_country,"
+                "agent_numbers=excluded.agent_numbers,agent_strategy=excluded.agent_strategy,"
+                "agent_pool_wait=excluded.agent_pool_wait",
+                (
+                    tid,
+                    payload.name,
+                    payload.message,
+                    agent,
+                    now(),
+                    request.state.user["id"],
+                    region,
+                    json.dumps(agents),
+                    payload.agent_strategy,
+                    payload.agent_pool_wait,
+                ),
             )
         return {"id": tid}
 
@@ -376,12 +415,7 @@ def management_router():
             raise ValueError("La campaña está activa; detenla antes de programar")
         if not engine.store.next_queued(payload.campaign_id):
             raise ValueError("La campaña no tiene contactos pendientes")
-        try:
-            due = local_instant(payload.local_at, payload.timezone)
-        except (ZoneInfoNotFoundError, ValueError) as error:
-            raise ValueError("Fecha u hora inválida: verifica la zona horaria") from error
-        if due <= datetime.now(UTC):
-            raise ValueError("Elige una fecha y hora futuras")
+        due = campaign_due_at(payload.local_at, payload.timezone)
         sid = uuid4().hex
         try:
             with ops(request).db:

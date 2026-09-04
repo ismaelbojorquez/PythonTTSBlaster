@@ -93,6 +93,17 @@ def run(directory: Path, port: int):
             params.statusCode = 403 if call.name == "403" else 200
             if call.name == "403":
                 params.reason = "Forbidden: outbound route denied"
+            if call.name in {"480", "4800"}:
+                params.statusCode = 480
+                if call.name == "480":
+                    reason = pj.SipHeader()
+                    reason.hName = "Reason"
+                    reason.hValue = 'Q.850;cause=20;text="Subscriber absent"'
+                    params.txOption.headers.append(reason)
+                    retry = pj.SipHeader()
+                    retry.hName = "Retry-After"
+                    retry.hValue = "120"
+                    params.txOption.headers.append(retry)
             delay = directory / "agent-answer-delay"
             if call.name == "200" and delay.exists():
                 params.statusCode = 180

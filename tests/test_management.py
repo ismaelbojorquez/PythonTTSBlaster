@@ -13,7 +13,7 @@ CAMPAIGN = {
     "name": "Programada",
     "template": "Hola {nombre}",
     "agent_number": "525500009999",
-    "csv_text": "telefono,nombre\n525500000001,Ana",
+    "csv_text": "Credito,telefono,nombre\nMGT-1,525500000001,Ana",
 }
 
 
@@ -72,6 +72,12 @@ def test_auth_roles_revocation_audit_and_secrets(tmp_path):
         assert client.get("/api/manage/audit").status_code == 403
         assert client.post("/api/campaigns", json=CAMPAIGN).status_code == 403
         assert client.get("/api/recordings/missing").status_code == 403
+        assert (
+            client.get(
+                "/api/traceability/bundle.zip", params={"by": "credit", "query": "CRED-1"}
+            ).status_code
+            == 403
+        )
         client.post("/api/auth/logout", json={})
         client.post("/api/auth/login", json=ADMIN)
         assert (
@@ -102,7 +108,7 @@ def test_templates_schedules_reports_and_validation(tmp_path):
         assert client.get("/api/manage/templates").json()[0]["agent_number"] == "525500009999"
         assert (
             client.post(
-                "/api/manage/templates", json={**template, "message": "{x.__class__}"}
+                "/api/manage/templates", json={**template, "message": "{Encabezado sin cierre"}
             ).status_code
             == 422
         )
