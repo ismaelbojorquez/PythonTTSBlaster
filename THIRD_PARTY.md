@@ -10,10 +10,10 @@
   no aporta modelos de IA. Su distribución conserva su licencia BSD y avisos
   de componentes incluidos. Las reglas AMD son una implementación propia;
   Asterisk y FreeSWITCH sólo se consultaron como referencias de funcionalidades.
-- **Voz de producción seleccionada**: `es_MX-claude-high`, descargada mediante la
+- **Voz predeterminada del ejemplo**: `es_MX-claude-high`, descargada mediante la
   herramienta oficial de Piper. Su tarjeta declara español de México, 22,050 Hz
-  y licencia Apache-2.0 para el conjunto de datos. La voz anterior
-  `es_MX-ald-medium` se conserva para la comparación local. Tarjeta de Claude:
+  y licencia Apache-2.0 para el conjunto de datos. La muestra
+  `es_MX-ald-medium` se conserva para comparación. Tarjeta de Claude:
   https://huggingface.co/rhasspy/piper-voices/tree/main/es/es_MX/claude/high.
 - **Voz de ejemplo original**: `es_MX-ald-medium`, descargada mediante la herramienta
   oficial de Piper desde

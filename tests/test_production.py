@@ -19,7 +19,7 @@ from blaster.web import create_app
 from scripts.check_production import check_layout
 from scripts.prepare_production import prepare
 
-ORIGIN = "https://tts.icc-soluciones.com"
+ORIGIN = "https://tts.example.com"
 PASSWORD = "ClaveDePrueba-2026-local"
 
 
@@ -49,7 +49,7 @@ def test_tunnel_login_origin_hosts_cookies_and_bootstrap(tmp_path):
         assert response.status_code == 200, response.text
         cookie = response.headers["set-cookie"].lower()
         assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
-        for forbidden in ("https://evil.example", "https://icc-soluciones.com", "null"):
+        for forbidden in ("https://evil.example", "https://example.com", "null"):
             assert (
                 client.post(
                     "/api/auth/login", json=credentials, headers={"Origin": forbidden}
@@ -113,7 +113,7 @@ def test_public_url_validation(url):
 
 
 def test_public_url_normalization():
-    assert Settings(web_public_url="https://TTS.icc-soluciones.com:443/").web_public_url == ORIGIN
+    assert Settings(web_public_url="https://TTS.example.com:443/").web_public_url == ORIGIN
     assert Settings(web_public_url="http://tts.example.test:8080").web_public_url.endswith(":8080")
 
 
@@ -202,7 +202,7 @@ def test_http_process_forwarding_and_sigterm_shutdown(tmp_path):
                 headers={
                     "Content-Type": "application/json",
                     "Origin": ORIGIN,
-                    "Host": "tts.icc-soluciones.com",
+                    "Host": "tts.example.com",
                     "X-Forwarded-Proto": "https",
                 },
             )

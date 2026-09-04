@@ -14,7 +14,7 @@ import tomlkit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from blaster.config import Settings, load_settings  # noqa: E402
 
-PUBLIC_URL = "https://tts.icc-soluciones.com"
+PUBLIC_URL = "https://tts.example.com"
 DATA_DIR = Path("/var/lib/pythonblastertts")
 
 

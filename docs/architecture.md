@@ -1,9 +1,9 @@
-# Motor SIP y alcance inicial
+# Arquitectura del motor y del panel
 
 ## Responsabilidades
 
 `Engine` controla sesiones con asyncio. Cada sesión tiene un contacto, un mensaje
-ya interpolado y hasta dos llamadas. SQLite sólo se toca desde ese mismo hilo.
+ya interpolado y hasta dos llamadas. Las escrituras operativas a SQLite se realizan desde ese mismo hilo; los reportes usan conexiones de lectura independientes.
 El scheduler admite sesiones hasta el menor límite configurado; la validación
 exige `2 * concurrency <= trunk_channels`. La reserva de canal para el agente
 es conservadora y evita llenar la troncal con personas a las que luego no puede
@@ -31,7 +31,7 @@ se rechaza: sólo el scheduler puede originar llamadas.
 `PiperSpeech` carga un conjunto acotado de voces al iniciar y entrega cada voz a
 una sola inferencia a la vez. La síntesis ocurre en hilos de Python ajenos al hilo
 SIP. El WAV PCM de 16 bits puede tener la frecuencia original de la voz; PJMEDIA
-lo convierte al reloj del códec negociado. La primera versión sintetiza el mensaje
+lo convierte al reloj del códec negociado. El motor sintetiza el mensaje
 completo después de la respuesta, por lo que hay una espera proporcional a su
 longitud y a la carga. `tts_timeout` limita la espera lógica, pero una inferencia
 nativa en ejecución no se puede interrumpir: se espera su finalización antes de
@@ -45,7 +45,7 @@ stateDiagram-v2
     [*] --> queued
     queued --> dialing
     dialing --> detecting: CONFIRMED + media activa / AMD activo
-    dialing --> synthesizing: AMD apagado
+    dialing --> synthesizing: CONFIRMED + media activa / AMD apagado
     detecting --> synthesizing: humano probable / incierto permitido
     detecting --> machine: buzón probable
     detecting --> amd_unknown: incierto / colgar

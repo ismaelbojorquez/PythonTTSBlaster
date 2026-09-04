@@ -1,29 +1,15 @@
 # Detección local de buzón sin IA
 
-Implementada el 3 de septiembre de 2026. La opción elegida para este proyecto es
-un detector por reglas acústicas en Python/NumPy, integrado con el audio entrante
+El detector utiliza reglas acústicas en Python/NumPy, integradas con el audio entrante
 de PJSUA2. No usa modelos entrenados, reconocimiento de palabras, servicios web,
-Asterisk ni FreeSWITCH. El TTS existente continúa usando Piper; la restricción de
-no usar IA se aplica al nuevo AMD.
+Asterisk ni FreeSWITCH. El TTS usa Piper, un modelo neuronal local; AMD no utiliza modelos de IA.
 
-## Comparación y elección
+## Criterios de diseño
 
-Se revisaron estas alternativas representativas. No existe aquí una evaluación
-comparativa con llamadas etiquetadas que permita declarar una como la más precisa
-del mercado. Se eligió por compatibilidad con las restricciones del proyecto.
-
-| Alternativa | Qué ofrece | Encaje en este proyecto |
-|---|---|---|
-| [Asterisk AMD](https://docs.asterisk.org/Latest_API/API_Documentation/Dialplan_Applications/AMD/) | Clasificación por voz, silencios y duración de segmentos; resultado incierto disponible. | Sus criterios son una referencia útil, pero desplegar Asterisk contradice la arquitectura solicitada. No se incorporó su código ni se ejecuta su motor. |
-| [FreeSWITCH AVMD](https://developer.signalwire.com/freeswitch/module-reference/applications/mod_avmd/) | Detecta tonos sostenidos mediante procesamiento de señales. | Necesita FreeSWITCH. Detectar sólo el pitido puede obligar a escuchar un saludo largo; no basta para cortar pronto todos los buzones. |
-| [Twilio AMD](https://www.twilio.com/docs/voice/answering-machine-detection-faq-best-practices) | Detección de tonos y actividad de voz con umbrales ajustables. | Requiere su infraestructura de Programmable Voice; su documentación excluye AMD en Elastic SIP Trunking. Añadiría un servicio externo. |
-| [Vonage AMD](https://developer.vonage.com/en/voice/voice-api/concepts/advanced-machine-detection) | Detección estándar/avanzada, síncrona o asíncrona, con pitido. | Forma parte de su Voice API y añade infraestructura externa. |
-| [Telnyx Premium AMD](https://developers.telnyx.com/docs/voice/programmable-voice/answering-machine-detection) | Clasificación avanzada, con detección de filtros de llamadas en modalidades específicas. | La modalidad Premium declara reconocimiento de voz y aprendizaje automático: incompatible con AMD sin IA, además de ser externo. |
-| [Dialogic HMP / PAMD](https://www.dialogic.com/-/media/manuals/docs/voice_programming_hmp_v6.pdf) | Análisis de progreso y detección positiva de contestadora mediante su Voice API. | Requiere integrar su plataforma/API de medios; no es un módulo independiente de Python para el PJSUA2 existente. |
-
-La implementación local combina temporización de actividad de voz con un detector
-espectral de tonos. Es un desarrollo propio y no una instalación de una de esas
-ofertas comerciales. No se promete la precisión de sus productos.
+El detector combina temporización de voz y pausas con análisis espectral de tonos.
+Está integrado en el mismo proceso que SIP y no necesita una central ni una API
+externa. Las reglas son una implementación propia. No hay una evaluación con
+llamadas etiquetadas que permita atribuirle una precisión comparativa de mercado.
 
 ## Recorrido de la llamada
 
@@ -48,10 +34,10 @@ resultados que cuelgan son terminales, liberan canales y aparecen en el CSV con
 su detalle. Una decisión humano o incierto que continúa se consulta en el
 historial aunque luego el estado final cambie a conversación finalizada.
 
-## Configuración instalada
+## Configuración de ejemplo
 
 Todos los parámetros están en `[amd]` de `config.toml`. El archivo de ejemplo
-contiene la misma sección comentada. Se activó el siguiente perfil inicial:
+contiene el siguiente perfil inicial comentado:
 
 | Parámetro | Valor | Efecto |
 |---|---:|---|
@@ -101,7 +87,7 @@ AMD necesita audio después de la respuesta. **No garantiza evitar el cargo por
 una llamada contestada por buzón.** Cortar pronto reduce tiempo conectado, pero
 el ahorro facturado depende del cobro inicial, redondeo y tarifa de la troncal.
 Si se cobra el primer minuto completo, colgar a los 2 segundos puede costar lo
-mismo que a los 40. No se ha medido un ahorro monetario con este operador.
+mismo que a los 40. El ahorro debe medirse con la tarifa y el tráfico de cada instalación.
 La necesidad de respuesta/audio antes de clasificar también está documentada por
 [Vonage](https://developer.vonage.com/en/voice/voice-api/concepts/advanced-machine-detection).
 

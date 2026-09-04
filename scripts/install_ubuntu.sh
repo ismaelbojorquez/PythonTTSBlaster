@@ -70,7 +70,9 @@ if [[ "$BLASTER_SOURCE" != "$BLASTER_APP" ]]; then
             --exclude='__pycache__/' --exclude='*.egg-info/' \
             "$BLASTER_SOURCE/$BLASTER_DIR/" "$BLASTER_APP/$BLASTER_DIR/"
     done
-    for BLASTER_FILE in pyproject.toml constraints.txt run.py README.md LICENSE THIRD_PARTY.md; do
+    for BLASTER_FILE in pyproject.toml constraints.txt config.example.toml run.py \
+        README.md INSTALL.md CONTRIBUTING.md SECURITY.md PRODUCT.md DESIGN.md \
+        LICENSE THIRD_PARTY.md; do
         install -o root -g root -m 0644 "$BLASTER_SOURCE/$BLASTER_FILE" "$BLASTER_APP/$BLASTER_FILE"
     done
 fi
