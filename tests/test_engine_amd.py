@@ -1,0 +1,91 @@
+import asyncio
+
+import pytest
+from amd_samples import signal, silence
+from conftest import campaign
+from test_engine import menu, until
+
+from blaster.config import AMDSettings
+from blaster.models import TERMINAL
+
+
+async def test_amd_machine_hangs_up_without_tts_or_agent(engine):
+    engine.settings.amd = AMDSettings(enabled=True)
+    cid = campaign(engine)
+    job = engine.store.jobs(cid)[0]
+    engine.telephony.amd_audio[job["phone"]] = signal(3000)
+
+    async def never_synthesize(*args):
+        pytest.fail("No debe generarse TTS para un buzón")
+
+    engine.speech.synthesize = never_synthesize
+    engine.start_campaign(cid)
+    await until(lambda: engine.active_campaign is None)
+    result = engine.store.jobs(cid)[0]
+    assert result["status"] == "machine"
+    assert result["ended_at"]
+    assert result["status"] in TERMINAL
+    assert "voz acumulada" in result["detail"]
+    assert not engine.telephony.legs
+    assert not engine.telephony.bridges
+    assert not list(engine.work_dir.glob("call-*"))
+
+
+async def test_amd_human_continues_and_agent_leg_is_not_screened(engine):
+    engine.settings.amd = AMDSettings(enabled=True)
+    cid = campaign(engine)
+    engine.start_campaign(cid)
+    jid = await menu(engine, cid)
+    session = engine.sessions[jid]
+    assert not session.customer.capturing
+    assert any("Humano probable" in e["detail"] for e in engine.store.events(jid))
+    engine.telephony.amd_audio["525550009999"] = signal(3000, (1000,))
+    engine.simulate(jid, "2")
+    await until(lambda: session.state == "bridged")
+    assert not session.agent.capturing
+    engine.simulate(jid, "agent_hangup")
+    await until(lambda: not engine.sessions)
+    assert engine.store.jobs(cid)[0]["status"] == "completed"
+
+
+@pytest.mark.parametrize("action", ["hangup", "continue"])
+async def test_amd_unknown_policy_and_history(engine, action):
+    engine.settings.amd = AMDSettings(enabled=True, unknown_action=action)
+    cid = campaign(engine)
+    job = engine.store.jobs(cid)[0]
+    engine.telephony.amd_audio[job["phone"]] = silence(3000)
+    engine.start_campaign(cid)
+    if action == "continue":
+        jid = await menu(engine, cid)
+        assert any("Incierto" in e["detail"] for e in engine.store.events(jid))
+        engine.simulate(jid, "hangup")
+        await until(lambda: not engine.sessions)
+    else:
+        await until(lambda: engine.active_campaign is None)
+        assert engine.store.jobs(cid)[0]["status"] == "amd_unknown"
+        assert not any(e["status"] == "synthesizing" for e in engine.store.events(job["id"]))
+
+
+async def test_concurrent_amd_results_do_not_mix(engine):
+    engine.settings.amd = AMDSettings(enabled=True)
+    cid = campaign(engine, count=2)
+    jobs = engine.store.jobs(cid)
+    engine.telephony.amd_audio[jobs[0]["phone"]] = signal(3000, (1000,))
+    engine.telephony.amd_audio[jobs[1]["phone"]] = silence(3000)
+    engine.start_campaign(cid)
+    await until(lambda: engine.active_campaign is None)
+    assert [j["status"] for j in engine.store.jobs(cid)] == ["machine", "amd_unknown"]
+
+
+async def test_campaign_stop_during_amd_releases_capture(engine):
+    engine.settings.amd = AMDSettings(enabled=True)
+    engine.telephony.audio_speed = 1
+    cid = campaign(engine)
+    engine.start_campaign(cid)
+    await until(lambda: any(s.state == "detecting" for s in engine.sessions.values()))
+    session = next(iter(engine.sessions.values()))
+    await asyncio.sleep(0.03)
+    await engine.stop_campaign(cid)
+    assert not session.customer.capturing
+    assert not engine.telephony.legs
+    assert engine.store.jobs(cid)[0]["status"] == "cancelled"

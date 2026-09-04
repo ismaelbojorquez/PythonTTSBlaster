@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173c48">
+  <title>Blaster · Analítica de llamadas</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/chart.umd.min.js" defer></script>
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#workspace">Ir al contenido</a>
+<section id="auth-view" class="auth-view" hidden aria-labelledby="auth-title">
+  <div class="auth-brand"><img src="/static/mark.svg" width="36" height="36" alt=""><strong>blaster</strong></div>
+  <h1 id="auth-title">Inicia sesión</h1><p id="auth-description">Accede a tus campañas y registros.</p>
+  <form id="auth-form"><div id="auth-name-field" hidden><label for="auth-name">Tu nombre</label><input id="auth-name" autocomplete="name" maxlength="100"></div><label for="auth-user">Usuario</label><input id="auth-user" autocomplete="username" required maxlength="80" pattern="(?:[a-zA-Z0-9_.@]|-)+"><label for="auth-password">Contraseña</label><input id="auth-password" type="password" autocomplete="current-password" required maxlength="256"><p id="auth-error" role="alert"></p><button class="primary full" type="submit" id="auth-submit">Entrar</button></form>
+</section>
+<div class="shell" hidden>
+  <aside class="sidebar" aria-label="Navegación principal">
+    <a href="/" class="brand"><img src="/static/mark.svg" alt="" width="32" height="32"><span>blaster<span class="brand-sub">Inteligencia de llamadas</span></span></a>
+    <nav class="primary-nav" aria-label="Secciones">
+      <button data-action="nav-dashboard" aria-current="page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>Dashboard</button>
+      <button data-action="nav-campaigns"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 17-6v16L3 14zM7 15v6h4l-1-5M20 9h2v6h-2"/></svg>Campañas</button>
+      <button data-action="nav-calls"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 4 5-3 3c2 3 3 4 6 6l3-3 5 4-2 3C10 23 1 14 3 5z"/></svg>Llamadas<span class="nav-caption">CDR</span></button>
+      <button data-action="nav-reports"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM14 3v5h5M8 17v-4m4 4V9m4 8v-6"/></svg>Reportes</button>
+      <button data-action="nav-operations"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M8 3v4M16 10v4M10 17v4"/></svg>Operación<span id="alert-count" class="nav-caption" hidden></span></button>
+    </nav>
+    <button class="primary new-button" data-action="new">Nueva campaña <svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button>
+    <div class="rail-heading">Campañas recientes <span id="campaign-count">0</span></div>
+    <nav id="campaign-list" aria-label="Seleccionar campaña"><p class="rail-empty">Tus campañas aparecerán aquí.</p></nav>
+    <div class="sidebar-foot"><span class="connection-dot" aria-hidden="true"></span><span>Motor local<span class="muted small">Python · SIP · TTS</span></span></div>
+  </aside>
+  <div class="main-shell">
+    <header class="topbar"><span class="topbar-title">Dashboard</span><div class="connection"><span id="session-user"></span><button class="text-link" data-action="logout">Salir</button><span id="live-count">0 en curso</span><span id="connection-state">Conectando…</span><span id="mode-badge" class="badge">Local</span></div></header>
+    <main id="workspace" tabindex="-1">
+      <div id="notice" role="alert" hidden></div>
+      <section class="capacity-strip" aria-label="Capacidad de llamadas" hidden>
+        <div><span class="label">Sesiones activas</span><strong id="active-count">0 <span>/ 3</span></strong></div>
+        <div><span class="label">Canales en uso</span><strong id="channel-count">0 <span>/ 10</span></strong></div>
+        <form id="capacity-form"><label for="concurrency">Llamadas simultáneas</label><div class="input-action"><input id="concurrency" type="number" min="1" max="5" value="3" required><button type="submit" class="subtle">Aplicar</button></div></form>
+        <p class="capacity-note">Cada llamada reserva 2 canales<br>para poder conectar con un agente.</p>
+      </section>
+
+      <div id="analytics-heading" class="section-heading"><div><h1 id="analytics-title">El pulso de tus llamadas</h1><p id="analytics-subtitle">De la primera marcación a la conversación con tu agente.</p></div><button class="secondary" data-action="download-xlsx">Descargar Excel <svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v11m-4-4 4 4 4-4M3 14v4h14v-4"/></svg></button></div>
+      <form id="analytics-filters" class="filter-bar" aria-label="Filtrar analítica">
+        <div><label for="filter-period">Período</label><select id="filter-period"><option value="30">Últimos 30 días</option><option value="7">Últimos 7 días</option><option value="1">Hoy</option><option value="all">Todo el historial</option><option value="custom">Personalizado</option></select></div>
+        <div><label for="filter-from">Desde</label><input id="filter-from" type="date"></div>
+        <div><label for="filter-to">Hasta</label><input id="filter-to" type="date"></div>
+        <div class="filter-campaign"><label for="filter-campaign">Campaña</label><select id="filter-campaign"><option value="">Todas las campañas</option></select></div>
+        <div><label for="filter-mode">Origen</label><select id="filter-mode"><option value="sip">SIP real</option><option value="simulation">Simulación</option><option value="all">Ambos modos</option></select></div>
+        <button type="submit" class="secondary">Aplicar</button>
+      </form>
+      <div id="analytics-context" class="analytics-context"><span id="filter-description">Cargando registros…</span><span id="analytics-updated"></span></div>
+
+      <section id="dashboard-view" aria-label="Dashboard de llamadas">
+        <div id="analytics-empty" class="inline-empty" hidden><strong>Aún no hay llamadas en este período.</strong><span>Amplía las fechas o crea una campaña para comenzar a registrar actividad.</span><button class="text-link" data-action="new">Crear campaña</button></div>
+        <div id="coverage-note" class="coverage-note" hidden></div>
+        <div class="metric-strip" id="dashboard-metrics" aria-label="Indicadores del período">
+          <div><span>Sesiones iniciadas</span><strong id="metric-total">—</strong><small id="metric-total-note">Consultando datos</small></div>
+          <div><span>Respuestas del cliente</span><strong id="metric-answer">—</strong><small id="metric-answer-note">Incluye buzones</small></div>
+          <div><span>Conversaciones con agente</span><strong id="metric-bridge">—</strong><small id="metric-bridge-note">Puentes establecidos</small></div>
+          <div><span>Tiempo medio conectado</span><strong id="metric-duration">—</strong><small id="metric-duration-note">Tramo del cliente</small></div>
+        </div>
+        <div class="chart-grid lead-charts">
+          <section class="chart-panel trend-panel"><div class="panel-heading"><div><h2>Actividad de llamadas</h2><p>Volumen, respuestas y conversaciones por día</p></div><span class="chart-unit">Llamadas</span></div><div class="chart-box trend-chart"><canvas id="trend-chart" role="img" aria-label="Actividad diaria. Datos disponibles en la tabla inferior."></canvas></div><details class="chart-data"><summary>Ver datos de la gráfica</summary><div id="trend-data" class="table-scroll"></div></details></section>
+          <section class="chart-panel outcomes-panel"><div class="panel-heading"><div><h2>Resultados</h2><p>Selecciona un resultado para investigarlo</p></div></div><div class="outcome-visual"><div class="donut-box"><canvas id="outcome-chart" role="img" aria-label="Distribución de resultados, detallada en la lista inferior."></canvas><div class="donut-center"><strong id="outcome-total">—</strong><span>sesiones</span></div></div></div><div id="outcome-legend" class="chart-legend"></div></section>
+        </div>
+        <div class="chart-grid secondary-charts">
+          <section class="chart-panel"><div class="panel-heading"><div><h2>Ruta hacia el agente</h2><p>Etapas observadas en las llamadas</p></div></div><div id="connection-funnel" class="funnel"></div><p class="chart-footnote">La respuesta SIP puede corresponder a una persona o un buzón.</p></section>
+          <section class="chart-panel"><div class="panel-heading"><div><h2>¿Quién finaliza?</h2><p>Iniciador según la evidencia disponible</p></div></div><div id="hangup-bars" class="bar-list"></div><p class="chart-footnote">Cliente y agente identifican el tramo remoto, no a una persona verificada.</p></section>
+          <section class="chart-panel"><div class="panel-heading"><div><h2>Detección de buzón</h2><p>Clasificación del saludo por AMD</p></div></div><div id="amd-bars" class="bar-list"></div><p class="chart-footnote">Resultados probables. Sin medición y desactivado se muestran por separado.</p></section>
+        </div>
+        <section class="timing-panel"><div><h2>Cada segundo, explicado</h2><p>Promedios de mediciones disponibles</p></div><div id="timing-metrics" class="timing-metrics"></div></section>
+        <div class="chart-grid lead-charts">
+          <section class="chart-panel"><div class="panel-heading"><div><h2>Rendimiento por campaña</h2><p>Actividad dentro del período seleccionado</p></div><button class="text-link" data-action="nav-campaigns">Ver campañas</button></div><div id="analytics-campaigns" class="table-scroll"></div></section>
+          <section class="chart-panel"><div class="panel-heading"><div><h2>Duración de las llamadas</h2><p>Tramo del cliente con fin observado</p></div></div><div id="duration-bars" class="bar-list"></div></section>
+        </div>
+      </section>
+
+      <section id="campaigns-view" hidden><div class="section-heading"><div><h1>Tus campañas</h1><p>Organiza contactos, mensajes y conversaciones.</p></div><button class="primary" data-action="new">Nueva campaña</button></div><div id="campaign-overview"></div></section>
+
+      <section id="calls-view" hidden>
+        <div id="calls-explorer"><form id="call-search-form" class="call-search"><div><label for="call-search">Buscar llamada</label><input id="call-search" type="search" placeholder="Teléfono, nombre o ID de llamada" maxlength="100"></div><div><label for="call-status-filter">Resultado</label><select id="call-status-filter"><option value="">Todos los resultados</option></select></div><button type="submit" class="secondary">Buscar</button><button type="button" class="text-link" data-action="download-csv">Exportar CDRs</button></form><div class="ledger"><div class="table-scroll"><table class="cdr-table"><caption class="visually-hidden">Registro detallado de llamadas</caption><thead><tr><th>Inicio</th><th>Contacto</th><th>Resultado</th><th>AMD</th><th>Conectado</th><th>Con agente</th><th>Finalizó</th></tr></thead><tbody id="cdr-rows"></tbody></table></div><div class="pagination"><span id="cdr-page-info"></span><div><button class="subtle" data-action="cdr-previous" id="cdr-previous">Anterior</button><button class="subtle" data-action="cdr-next" id="cdr-next">Siguiente</button></div></div></div></div>
+        <article id="cdr-detail" tabindex="-1" hidden></article>
+      </section>
+
+      <section id="reports-view" hidden>
+        <div class="report-feature"><div><h2>Tu operación, lista para analizar</h2><p>Descarga el mismo corte de fechas, campaña y origen que estás viendo. Cada archivo conserva las mediciones disponibles y distingue los registros históricos.</p><div class="report-actions"><button class="primary" data-action="download-xlsx">Generar reporte Excel</button><button class="secondary" data-action="download-csv">Descargar CDRs en CSV</button></div><p id="report-scope" class="small muted"></p><p id="report-progress" role="status"></p></div><div class="report-manifest"><span class="file-kind">XLSX</span><strong>Reporte de llamadas</strong><span>8 hojas · gráficos · filtros</span><ol><li>Resumen ejecutivo</li><li>Tendencia y resultados</li><li>Rendimiento por campaña</li><li>CDRs y tramos SIP</li><li>Eventos y definiciones</li></ol></div></div>
+        <section class="report-definitions"><h2>Datos que puedes llevarte</h2><dl><div><dt>Respuesta y clasificación</dt><dd>Teléfono, nombre importado, respuesta SIP y resultado AMD con sus mediciones.</dd></div><div><dt>Transferencia al agente</dt><dd>Quién solicitó la conexión, marcación, respuesta del agente y duración del puente.</dd></div><div><dt>Tiempos y finalización</dt><dd>Inicio, timbrado, respuesta, audio activo, desconexión, códigos SIP e iniciador del cierre.</dd></div><div><dt>Evidencia trazable</dt><dd>IDs de sesión y de cada tramo SIP, cronología y cobertura de los registros.</dd></div></dl><p class="chart-footnote">Las duraciones son mediciones de la aplicación, no importes ni tiempos facturados por el proveedor. Las grabaciones de voz humana están disponibles por separado en el CDR, según permisos y conservación.</p></section>
+      </section>
+
+      <section id="operations-view" hidden>
+        <div class="section-heading"><div><h1 id="ops-title">Operación</h1><p id="ops-subtitle">Rutas, mensajes y tareas bajo control.</p></div><button class="secondary" data-action="ops-refresh">Actualizar</button></div>
+        <nav id="ops-tabs" class="ops-tabs" aria-label="Operación y administración"></nav>
+        <div id="ops-feedback" role="status" class="ops-feedback"></div>
+        <div id="ops-content" aria-live="polite"></div>
+      </section>
+      <section id="empty-view" class="empty-view" hidden>
+        <svg class="empty-diagram" viewBox="0 0 312 86" fill="none" aria-hidden="true"><path d="M57 43h73m52 0h73" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="16" width="56" height="54" rx="12" stroke="currentColor" stroke-width="1.5"/><path d="M18 43h4l3-11 5 23 4-20 4 8h3" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><rect x="130" y="1" width="52" height="84" rx="10" stroke="currentColor" stroke-width="1.5"/><path d="M149 12h14m-10 62h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="283" cy="43" r="27" stroke="currentColor" stroke-width="1.5"/><circle cx="283" cy="37" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M270 56c0-14 26-14 26 0" stroke="currentColor" stroke-width="1.5"/></svg>
+        <h1>Una llamada. Un mensaje personal.</h1>
+        <p>Prepara tus contactos, escribe el mensaje y conecta<br class="desktop-break"> a cada persona con la información que necesita.</p>
+        <div class="empty-actions"><button class="primary" data-action="new">Crear mi primera campaña</button><button id="demo-button" class="secondary" data-action="demo">Probar con una demostración</button></div>
+        <div class="flow-explanation"><span>Mensaje personalizado</span><svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h14m-5-5 5 5-5 5"/></svg><span>Opciones por teclado</span><svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h14m-5-5 5 5-5 5"/></svg><span>Conversación con agente</span></div>
+        <p id="simulation-note" class="small muted">La simulación permite recorrer el flujo sin emitir llamadas ni voz real.</p>
+      </section>
+
+      <section id="editor-view" hidden>
+        <div class="section-heading"><div><h1>Nueva campaña</h1><p>Define a quién llamar y qué mensaje escuchará.</p></div><button class="subtle" data-action="back">Volver</button></div>
+        <form id="campaign-form" class="editor-grid">
+          <div class="editor-fields">
+            <label for="campaign-name">Nombre de la campaña</label>
+            <input id="campaign-name" name="name" placeholder="Ej. Recordatorios de septiembre" maxlength="100" required>
+            <label for="agent-number">Número del agente</label>
+            <input id="agent-number" name="agent_number" type="tel" placeholder="52 55 1234 5678" required>
+            <p class="field-help">Se marcará a este número cuando la persona presione 2.</p>
+            <div class="label-row"><label for="contacts">Contactos</label><label for="csv-file" class="file-label">Importar CSV<input id="csv-file" type="file" accept=".csv,text/csv" class="visually-hidden"></label></div>
+            <textarea id="contacts" name="csv_text" rows="7" placeholder="telefono,nombre,fecha&#10;525512345678,Ana,viernes 12 de septiembre" required spellcheck="false"></textarea>
+            <p class="field-help">Una fila por persona. La columna <code>telefono</code> es obligatoria; las demás son variables de tu mensaje.</p>
+            <label for="template-picker">Usar una plantilla</label><select id="template-picker"><option value="">Escribir un mensaje nuevo</option></select>
+            <label for="message">Mensaje personalizado</label>
+            <textarea id="message" name="template" rows="5" maxlength="4000" required placeholder="Hola {nombre}. Te recordamos tu cita del {fecha}."></textarea>
+            <p class="field-help">Usa las columnas entre llaves: <code>{nombre}</code>, <code>{fecha}</code>. Las opciones del menú se agregan automáticamente.</p>
+          </div>
+          <div class="editor-preview">
+            <h2>Así será la llamada</h2>
+            <ol class="call-sequence"><li><strong>La llamada es contestada</strong><p>Con detección de buzón activa, primero se analiza el saludo. La voz se genera en este equipo con sus datos.</p></li><li><strong>Escucha tu mensaje</strong><div id="message-preview">Completa los datos y revisa el mensaje antes de crear la campaña.</div></li><li><strong>Elige cómo continuar</strong><p><kbd>1</kbd> Escuchar el mensaje de nuevo</p><p><kbd>2</kbd> Hablar con un agente</p></li></ol>
+            <p class="preview-help">El agente y la persona se conectan cuando el agente contesta.</p>
+            <button type="button" class="secondary full" data-action="preview">Revisar personalización</button>
+            <div id="preview-result" class="small" role="status"></div>
+            <div class="tts-preview">
+              <h3>Escucha antes de enviar</h3>
+              <p class="field-help">Usa la voz configurada y los datos del primer contacto. Incluye las opciones del menú.</p>
+              <button id="tts-preview-button" type="button" class="secondary full">Escuchar TTS</button>
+              <p id="tts-preview-status" class="small" role="status" aria-live="polite"></p>
+              <div id="tts-preview-result" hidden>
+                <p id="tts-preview-caption" class="small"></p>
+                <audio id="tts-preview-audio" controls preload="metadata" aria-label="Vista previa del mensaje y menú"></audio>
+              </div>
+            </div>
+          </div>
+          <div class="form-footer"><p>Crear la campaña la guarda como borrador.<br>Podrás iniciar las llamadas desde su panel.</p><button class="primary" type="submit">Crear campaña</button></div>
+        </form>
+      </section>
+
+      <section id="campaign-view" hidden>
+        <div class="section-heading"><div><div class="heading-with-status"><h1 id="campaign-title">Campaña</h1><span id="campaign-state" class="badge">Borrador</span></div><p id="campaign-description"></p></div><div class="campaign-actions"><button class="secondary write-control" data-action="schedule-campaign">Programar</button><button id="start-button" class="primary" data-action="start">Iniciar simulación</button><button id="pause-button" class="secondary" data-action="pause" hidden>Pausar</button><button id="stop-button" class="danger-quiet" data-action="stop" hidden>Detener</button></div></div>
+        <div id="mode-information" class="mode-information">Modo simulación. Selecciona una llamada para probar las opciones del teclado.</div>
+        <p id="amd-note" class="mode-information" hidden></p>
+        <div class="ledger-toolbar"><div id="campaign-summary">Contactos pendientes</div><a id="export-link" class="text-link" href="#">Exportar resultados</a></div>
+        <div class="ledger-layout">
+          <div class="ledger"><div class="table-scroll"><table><caption class="visually-hidden">Contactos y resultados de la campaña</caption><thead><tr><th scope="col">Contacto</th><th scope="col">Estado</th><th scope="col">Detalle</th></tr></thead><tbody id="job-rows"></tbody></table></div><div class="pagination"><span id="page-info"></span><div><button class="subtle" id="previous-page" data-action="previous">Anterior</button><button class="subtle" id="next-page" data-action="next">Siguiente</button></div></div></div>
+          <aside id="call-detail" class="call-detail" aria-label="Detalle de llamada" tabindex="-1"><h2>Detalle de llamada</h2><p class="muted">Selecciona un contacto para ver su mensaje y el recorrido de la llamada.</p></aside>
+        </div>
+      </section>
+    </main>
+    <footer class="page-footer"><span>Blaster TTS</span><span>Voz local. Conversaciones conectadas.</span></footer>
+  </div>
+</div>
+</body>
+</html>

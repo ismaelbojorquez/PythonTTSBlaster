@@ -1,0 +1,77 @@
+# Plantilla de servidor. El instalador guarda la configuración privada en /etc/pythonblastertts/config.toml.
+mode = "sip"
+web_port = 8765 # puerto del panel en http://127.0.0.1:8765
+web_public_url = "https://tts.icc-soluciones.com" # URL externa existente; el proceso sigue sirviendo HTTP
+data_dir = "/var/lib/pythonblastertts"
+reporting_timezone = "America/Mexico_City"
+report_max_rows = 20000
+concurrency = 3
+trunk_channels = 10 # cada sesión reserva 2 para poder llamar al agente
+calls_per_second = 1.0
+ring_timeout = 40.0
+agent_timeout = 30.0
+choice_timeout = 12.0
+max_call_seconds = 1800.0
+max_repeats = 2
+tts_workers = 2
+tts_timeout = 90.0
+voice_model = "/var/lib/pythonblastertts/voices/es_MX-claude-high.onnx" # Piper mexicano: mejor latencia medida
+routing = "priority"
+
+[amd]
+enabled = true # análisis local por señales, sin IA; sólo en la llamada al contacto
+unknown_action = "hangup" # "continue" permite seguir cuando no se puede clasificar
+total_analysis_ms = 5000 # plazo máximo desde que comienza la captura
+initial_silence_ms = 2500 # sin saludo: INCIERTO (no implica que sea buzón)
+after_greeting_silence_ms = 1000 # pausa tras saludo breve: humano probable
+greeting_speech_ms = 2400 # voz acumulada larga: buzón probable
+minimum_word_ms = 100 # duración mínima de un segmento de voz
+between_words_silence_ms = 100
+maximum_words = 5 # segmentos acústicos, no palabras reconocidas
+silence_threshold = 256 # RMS del PCM de 16 bits; aumentar si hay mucho ruido
+beep_enabled = true
+beep_min_ms = 240 # tono estable; no espera a que termine el saludo del buzón
+beep_min_hz = 600
+beep_max_hz = 2000
+beep_purity = 0.90
+beep_frequency_tolerance_hz = 35
+
+[sip]
+domain = "sip.proveedor.example"
+username = "usuario"
+password = '' # contraseña de la troncal, escrita directamente aquí
+auth_username = "" # vacío usa username
+caller_id = "" # vacío usa username; el proveedor debe autorizar este número
+registrar = "sip:sip.proveedor.example"
+proxy = "" # ej. "sip:sbc.proveedor.example;lr"
+registration_enabled = true # false para troncal autenticada por IP
+dial_format = "as_entered" # "mexico_52": 52 + 10 dígitos, sin +, para contacto y agente
+transport = "udp" # "udp" o "tcp"; TLS/SRTP fuera del alcance inicial
+bind_address = "0.0.0.0"
+local_port = 5060
+public_address = "" # IP pública anunciada en SIP y SDP, si hay NAT estático
+rtp_port = 10000
+rtp_port_range = 200 # abrir UDP 10000–10200, incluidos RTP y RTCP
+
+[auth]
+enabled = true
+session_hours = 8
+# Sólo crea el primer administrador si la base todavía no tiene usuarios.
+bootstrap_username = ""
+bootstrap_password = '' # mínimo 12 caracteres; no cambia usuarios existentes
+bootstrap_display_name = "Administrador"
+
+[recordings]
+enabled = true
+retention_days = 30
+max_storage_mb = 10240
+min_free_mb = 256
+
+[automation]
+enabled = true
+poll_seconds = 5
+late_schedule_minutes = 60
+trunk_alert_seconds = 60
+failure_alert_percent = 50
+failure_alert_min_calls = 10
+report_retention_days = 90

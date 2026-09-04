@@ -1,0 +1,38 @@
+[Unit]
+Description=Blaster TTS - campañas SIP y panel web
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=blaster
+Group=blaster
+WorkingDirectory=/opt/pythonblastertts
+ExecStartPre=/opt/pythonblastertts/.venv/bin/python -B scripts/check_production.py --config /etc/pythonblastertts/config.toml
+ExecStart=/opt/pythonblastertts/.venv/bin/python -B -u run.py --config /etc/pythonblastertts/config.toml
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=360
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blaster
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/etc/pythonblastertts /var/lib/pythonblastertts
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
