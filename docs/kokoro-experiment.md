@@ -79,3 +79,44 @@ rm -rf .venv-kokoro .cache/kokoro
 
 Después elimina la sección `[kokoro]` o cambia `enabled = false`. Las campañas,
 grabaciones, CDR y modelos Piper no dependen de esas carpetas.
+
+## Instalación en Ubuntu
+
+La instalación base del servidor utiliza Piper. Después de completar
+[INSTALL.md](../INSTALL.md), instala Kokoro dentro de la copia utilizada por
+`blaster.service`:
+
+```bash
+sudo systemctl stop blaster
+sudo env PYTHON_BIN=/usr/bin/python3.12 bash \
+  /opt/pythonblastertts/scripts/install_kokoro_experiment.sh
+```
+
+En `/etc/pythonblastertts/config.toml` utiliza rutas del servidor:
+
+```toml
+tts_engine = "kokoro"
+
+[kokoro]
+enabled = true
+python = "/opt/pythonblastertts/.venv-kokoro/bin/python"
+model = "/opt/pythonblastertts/.cache/kokoro/models/kokoro-v1.0.onnx"
+voices = "/opt/pythonblastertts/.cache/kokoro/models/voices-v1.0.bin"
+voice = "ef_dora"
+language = "es"
+speed = 1.0
+startup_timeout = 90.0
+```
+
+Valida antes de iniciar:
+
+```bash
+sudo -u blaster /opt/pythonblastertts/.venv/bin/python \
+  /opt/pythonblastertts/scripts/check_production.py \
+  --config /etc/pythonblastertts/config.toml
+sudo systemctl start blaster
+```
+
+Para volver a Piper en el servidor, selecciónalo desde **Operación → Voces** o
+cambia `tts_engine = "piper"`, reinicia y elimina `.venv-kokoro` y `.cache/kokoro`
+de `/opt/pythonblastertts` durante una ventana de mantenimiento.

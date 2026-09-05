@@ -134,7 +134,8 @@ requiere Python 3.12 o 3.13. Windows nativo no está soportado.
 | Guía | Contenido |
 |---|---|
 | [Ejecución local en Mac](docs/local.md) | Arranque desde la carpeta, entorno y localhost |
-| [Instalación opcional en Ubuntu](INSTALL.md) | Servidor, usuario, Python, instalación y acceso |
+| [Instalación en Ubuntu](INSTALL.md) | Servidor limpio, usuario, Python, systemd y Cloudflare Tunnel |
+| [Cloudflare Tunnel](docs/cloudflare-tunnel.md) | Dominio, servicio, token, actualización y diagnóstico |
 | [Configuración](docs/configuration.md) | TOML, SIP, varias troncales, puertos y límites |
 | [Uso del panel](docs/usage.md) | Campañas, roles, agenda, CDR, reportes y grabaciones |
 | [Producción](docs/production.md) | Servicio, actualización, respaldos y recuperación |

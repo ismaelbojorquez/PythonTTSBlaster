@@ -162,6 +162,8 @@ export async function bootSession() {
 }
 function showLogin() {
   $(".shell").hidden=true; $("#auth-view").hidden=false;
+  document.body.classList.add("auth-active");
+  document.body.classList.toggle("auth-setup",setup);
   $("#auth-title").textContent=t(setup?"Crea tu acceso administrador":"Inicia sesión");
   $("#auth-description").textContent=t(setup?"Este primer usuario administrará proveedores, permisos y configuración.":"Accede a tus campañas, reportes e historial.");
   $("#auth-name-field").hidden=!setup; $("#auth-name").required=setup;
@@ -172,6 +174,7 @@ function showLogin() {
 }
 function showSession() {
   $("#auth-view").hidden=true; $(".shell").hidden=false;
+  document.body.classList.remove("auth-active","auth-setup");
   $("#session-user").textContent=ctx.state.user.display_name;
   ctx.state.current=null; ctx.state.selected=null; ctx.state.jobs=[];
   ctx.view("dashboard"); applyRole();

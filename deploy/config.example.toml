@@ -1,7 +1,7 @@
 # Plantilla de servidor. El instalador guarda la configuración privada en /etc/pythonblastertts/config.toml.
 mode = "sip"
 web_port = 8765 # puerto del panel en http://127.0.0.1:8765
-web_public_url = "https://tts.example.com" # REEMPLAZA por tu dominio; el proceso sigue sirviendo HTTP
+web_public_url = "https://app.example.com" # REEMPLAZA por tu dominio; el proceso sigue sirviendo HTTP
 data_dir = "/var/lib/pythonblastertts"
 reporting_timezone = "America/Mexico_City"
 report_max_rows = 20000
@@ -22,8 +22,8 @@ routing = "priority"
 [kokoro]
 enabled = false
 python = "/opt/pythonblastertts/.venv-kokoro/bin/python"
-model = "/var/cache/pythonblastertts/kokoro/kokoro-v1.0.onnx"
-voices = "/var/cache/pythonblastertts/kokoro/voices-v1.0.bin"
+model = "/opt/pythonblastertts/.cache/kokoro/models/kokoro-v1.0.onnx"
+voices = "/opt/pythonblastertts/.cache/kokoro/models/voices-v1.0.bin"
 voice = "ef_dora"
 language = "es"
 speed = 1.0

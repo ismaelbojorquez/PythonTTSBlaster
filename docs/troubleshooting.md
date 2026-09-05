@@ -100,13 +100,18 @@ bloqueo no es una solución: permite que dos procesos abran los mismos datos.
 
 ```bash
 curl --fail http://127.0.0.1:8765/healthz
+sudo systemctl status cloudflared --no-pager
+sudo journalctl -u cloudflared -n 100 --no-pager
 ```
 
 Si funciona, comprueba que el túnel/proxy apunte a ese origen y que
 `web_public_url` coincida con la URL externa exacta. Un 400 puede indicar Host
 no admitido; un 403 al guardar puede indicar Origin distinto. Con cookies Secure,
 usa la URL HTTPS externa o configura el origen HTTP correcto para acceso por SSH.
-El valor `tts.example.com` de la plantilla debe sustituirse por un dominio propio.
+El valor `app.example.com` de la plantilla debe sustituirse por un dominio propio.
+En Cloudflare, la ruta publicada debe usar el hostname público y el servicio
+`http://127.0.0.1:8765`. Un túnel **Healthy** no confirma que el origen local
+responda. Sigue el diagnóstico por capas de [Cloudflare Tunnel](cloudflare-tunnel.md).
 
 ## Prueba manual del registro SIP
 

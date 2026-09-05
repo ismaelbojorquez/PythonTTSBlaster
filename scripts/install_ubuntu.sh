@@ -119,4 +119,4 @@ if ! runuser -u blaster -- .venv/bin/python scripts/check_production.py --config
 fi
 printf '%s\n' 'Blaster está ejecutándose y habilitado al arrancar Ubuntu.' \
     'Consulta el administrador inicial en [auth] de /etc/pythonblastertts/config.toml.' \
-    'El túnel existente debe apuntar a HTTP 127.0.0.1 y al web_port del TOML (8765 por defecto).'
+    'Cloudflare Tunnel debe apuntar a HTTP 127.0.0.1 y al web_port del TOML (8765 por defecto). Consulta INSTALL.md.'

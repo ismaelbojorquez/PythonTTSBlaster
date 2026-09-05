@@ -14,6 +14,9 @@ revócala o rótala; eliminarla del último commit no elimina las copias anterio
 Los secretos SIP y el bootstrap del administrador se guardan en TOML. La aplicación
 conserva hashes de contraseñas de usuarios y sesiones en SQLite. Los reportes y
 respuestas de configuración no deben incluir contraseñas SIP ni secretos bootstrap.
+El token de Cloudflare Tunnel también es un secreto: no pertenece al TOML, al
+repositorio ni a los respaldos de Blaster. Instálalo mediante `cloudflared` y
+rótalo desde Cloudflare si se expone.
 
 ## Despliegue
 
@@ -21,6 +24,8 @@ El panel escucha en loopback y utiliza autenticación por sesión y roles. El
 acceso externo debe coincidir con `web_public_url`. El servicio suministrado
 crea el administrador antes de servir tráfico y limita escritura a configuración
 y datos. Consulta [INSTALL.md](INSTALL.md) y [producción](docs/production.md).
+La guía de [Cloudflare Tunnel](docs/cloudflare-tunnel.md) mantiene el panel en
+loopback y documenta el tratamiento del token.
 
 El HTTP interno está pensado para un proxy/túnel en el mismo servidor o reenvío
 SSH. SIP usa UDP/TCP sin TLS/SRTP en esta versión. Configura la conectividad y los

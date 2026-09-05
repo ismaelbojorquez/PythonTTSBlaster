@@ -1,7 +1,8 @@
 # Administración en producción
 
 Para una instalación nueva sigue [INSTALL.md](../INSTALL.md). Esta guía describe
-el servicio ya instalado con HTTP en loopback y acceso mediante túnel/proxy o SSH.
+el servicio ya instalado con HTTP en loopback y acceso mediante Cloudflare Tunnel
+o SSH.
 
 ## Directorios y cuentas
 
@@ -13,6 +14,7 @@ el servicio ya instalado con HTTP en loopback y acceso mediante túnel/proxy o S
 | SQLite, audios y reportes | `/var/lib/pythonblastertts` |
 | Modelos Piper | `/var/lib/pythonblastertts/voices` |
 | Unidad systemd | `/etc/systemd/system/blaster.service` |
+| Túnel web | `cloudflared.service`, administrado desde Cloudflare |
 | Administración del servidor | `deploy`, con permisos sudo |
 | Ejecución de la aplicación | `blaster`, sin inicio de sesión interactivo |
 
@@ -26,6 +28,8 @@ SQLite, agenda y motor SIP tienen un único propietario.
 ```bash
 sudo systemctl status blaster --no-pager
 sudo systemctl is-enabled blaster
+sudo systemctl status cloudflared --no-pager
+sudo systemctl is-enabled cloudflared
 curl --fail http://127.0.0.1:8765/healthz
 sudo journalctl -u blaster -f
 ```
@@ -68,7 +72,7 @@ Consulta [configuración](configuration.md) antes de cambiar puertos o capacidad
 ## Acceso por dominio
 
 Configura `web_public_url` con el origen exacto del navegador, por ejemplo
-`https://tts.example.com`. El ejemplo debe sustituirse por un dominio propio.
+`https://app.example.com`. El ejemplo debe sustituirse por un dominio propio.
 El origen del túnel/proxy en el mismo servidor es `http://127.0.0.1:8765`.
 El proceso sólo acepta cabeceras de proxy desde loopback.
 
@@ -76,6 +80,10 @@ El esquema externo HTTPS activa cookies Secure; no instala HTTPS en la aplicaci�
 Para acceso sólo por SSH se puede usar `web_public_url = "http://localhost:8765"`
 y el reenvío descrito en [instalación](../INSTALL.md). Un error de Host/Origin no
 se corrige desactivando autenticación: comprueba que la URL coincida.
+
+La instalación, rotación de token, actualización y diagnóstico del conector se
+documentan en [Cloudflare Tunnel](cloudflare-tunnel.md). El token del túnel no
+forma parte del TOML ni de los respaldos de Blaster.
 
 ## Respaldo consistente
 
@@ -125,6 +133,14 @@ el instalador no actualiza la copia que usa el servicio.
 Para volver a una versión anterior, usa su revisión de código y una copia de
 la base compatible. No se garantiza que una base migrada pueda abrirse con una
 versión anterior sin restauración.
+
+Actualiza `cloudflared` por separado cuando APT publique una versión nueva:
+
+```bash
+sudo apt update
+sudo apt install --only-upgrade cloudflared
+sudo systemctl restart cloudflared
+```
 
 ## Migrar desde otro equipo
 

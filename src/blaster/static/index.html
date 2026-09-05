@@ -204,21 +204,23 @@
               <div id="contact-variables" class="contact-variables"></div>
             </div>
           </div>
-          <div class="editor-preview">
-            <h2>Así será la llamada</h2>
-            <ol class="call-sequence"><li><strong>La llamada es contestada</strong><p>Con detección de buzón activa, primero se analiza el saludo. La voz se genera en este equipo con sus datos.</p></li><li><strong>Escucha tu mensaje</strong><div id="message-preview">Completa los datos y revisa el mensaje antes de crear la campaña.</div></li><li><strong>Elige cómo continuar</strong><p><kbd>1</kbd> Escuchar el mensaje de nuevo</p><p><kbd>2</kbd> Hablar con un agente</p></li></ol>
-            <p class="preview-help">El agente y la persona se conectan cuando el agente contesta.</p>
-            <button type="button" class="secondary full" data-action="preview">Revisar personalización</button>
-            <div id="preview-result" class="small" role="status"></div>
-            <div class="tts-preview">
-              <div class="tts-preview-heading"><h3>Escucha antes de enviar</h3><button type="button" class="text-link voice-settings-link" data-action="open-voices">Comparar voces</button></div>
-              <p class="field-help">Usa la voz activa y los datos del primer contacto. Incluye las opciones del menú.</p>
-              <button id="tts-preview-button" type="button" class="secondary full">Escuchar mensaje</button>
-              <p id="tts-preview-status" class="small" role="status" aria-live="polite"></p>
-              <div id="tts-preview-result" hidden>
-                <p id="tts-preview-caption" class="small"></p>
-                <audio id="tts-preview-audio" controls preload="metadata" aria-label="Vista previa del mensaje y menú"></audio>
-                <div id="tts-preview-performance" class="tts-preview-performance"></div>
+          <div class="editor-preview-rail">
+            <div class="editor-preview">
+              <h2>Así será la llamada</h2>
+              <ol class="call-sequence"><li><strong>La llamada es contestada</strong><p>Con detección de buzón activa, primero se analiza el saludo. La voz se genera en este equipo con sus datos.</p></li><li><strong>Escucha tu mensaje</strong><div id="message-preview">Completa los datos y revisa el mensaje antes de crear la campaña.</div></li><li><strong>Elige cómo continuar</strong><p><kbd>1</kbd> Escuchar el mensaje de nuevo</p><p><kbd>2</kbd> Hablar con un agente</p></li></ol>
+              <p class="preview-help">El agente y la persona se conectan cuando el agente contesta.</p>
+              <button type="button" class="secondary full" data-action="preview">Revisar personalización</button>
+              <div id="preview-result" class="small" role="status"></div>
+              <div class="tts-preview">
+                <div class="tts-preview-heading"><h3>Escucha antes de enviar</h3><button type="button" class="text-link voice-settings-link" data-action="open-voices">Comparar voces</button></div>
+                <p class="field-help">Usa la voz activa y los datos del primer contacto. Incluye las opciones del menú.</p>
+                <button id="tts-preview-button" type="button" class="secondary full">Escuchar mensaje</button>
+                <p id="tts-preview-status" class="small" role="status" aria-live="polite"></p>
+                <div id="tts-preview-result" hidden>
+                  <p id="tts-preview-caption" class="small"></p>
+                  <audio id="tts-preview-audio" controls preload="metadata" aria-label="Vista previa del mensaje y menú"></audio>
+                  <div id="tts-preview-performance" class="tts-preview-performance"></div>
+                </div>
               </div>
             </div>
           </div>
