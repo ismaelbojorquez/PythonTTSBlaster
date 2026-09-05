@@ -33,7 +33,7 @@ export function removeCsvPhonePlus(value) {
     if (i < value.length && (quoted || ![delimiter, "\r", "\n"].includes(char))) continue;
     if (header) {
       const name = value.slice(start, i).replace(/^"(.*)"$/, "$1").replace(/""/g, '"');
-      if (["telefono", "teléfono"].includes(name.trim().normalize("NFC").toLowerCase())) phoneColumn = column;
+      if (["telefono", "teléfono", "phone", "telephone"].includes(name.trim().normalize("NFC").toLowerCase())) phoneColumn = column;
     } else if (column === phoneColumn) {
       for (let j = start; j < i; j++) if (value[j] === "+") removed.push(j);
     }

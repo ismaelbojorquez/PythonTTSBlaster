@@ -29,6 +29,12 @@ def finish_all(app):
             "started_at='2026-09-04T12:00:00+00:00',"
             "ended_at='2026-09-04T12:00:05+00:00'"
         )
+        db.execute(
+            "INSERT INTO call_legs(id,job_id,role,number,created_at,invite_at,ended_at,trunk_id) "
+            "SELECT lower(hex(randomblob(16))),id,'customer',phone,started_at,started_at,"
+            "ended_at,'default' FROM jobs WHERE NOT EXISTS "
+            "(SELECT 1 FROM call_legs WHERE call_legs.job_id=jobs.id AND role='customer')"
+        )
 
 
 def test_credit_is_required_and_survives_retry_and_copy(tmp_path):
@@ -100,7 +106,7 @@ def test_v6_migration_keeps_missing_historical_credit_explicit(tmp_path):
         store.db.execute("PRAGMA user_version=6")
     store.close()
     reopened = Store(path)
-    assert reopened.db.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert reopened.db.execute("PRAGMA user_version").fetchone()[0] == 8
     assert reopened.jobs(cid)[0]["credit_id"] == ""
     assert reopened.missing_identifiers(cid) == 1
     actor = {"id": "admin", "username": "admin"}
@@ -153,12 +159,35 @@ def test_exact_trace_report_and_recording_bundle(tmp_path):
         assert data["total"] == 2 and data["metrics"]["campaigns"] == 2
         assert data["metrics"]["recordings"] == 1
         assert {row["credit_id"] for row in data["items"]} == {"CRED-001"}
+        assert {row["customer_trunk_id"] for row in data["items"]} == {"default"}
+        assert {row["customer_trunk_name"] for row in data["items"]} == {
+            "Troncal principal"
+        }
 
         by_phone = client.get(
             "/api/traceability", params={"by": "phone", "query": "+52 (55) 1234-5678"}
         ).json()
         assert by_phone["total"] == 2
         assert {row["credit_id"] for row in by_phone["items"]} == {"CRED-001", "CRED-002"}
+
+        by_national_phone = client.get(
+            "/api/traceability",
+            params={"by": "phone", "query": "55 1234-5678", "country": "MX"},
+        ).json()
+        assert by_national_phone["total"] == 2
+        assert {row["phone"] for row in by_national_phone["items"]} == {"525512345678"}
+
+        phone_report = client.get(
+            "/api/traceability/report.xlsx",
+            params={"by": "phone", "query": "5512345678", "country": "MX"},
+        )
+        assert phone_report.status_code == 200, phone_report.text
+
+        phone_bundle = client.get(
+            "/api/traceability/bundle.zip",
+            params={"by": "phone", "query": "5512345678", "country": "MX"},
+        )
+        assert phone_bundle.status_code == 200, phone_bundle.text
 
         report = client.get(
             "/api/traceability/report.xlsx", params={"by": "credit", "query": "CRED-001"}
@@ -167,8 +196,24 @@ def test_exact_trace_report_and_recording_bundle(tmp_path):
         workbook = load_workbook(io.BytesIO(report.content), read_only=True)
         headers = [cell.value for cell in next(workbook["CDRs"].iter_rows())]
         credit_column = headers.index("Credito") + 1
+        trunk_column = headers.index("Troncal de salida") + 1
+        trunk_id_column = headers.index("ID troncal de salida") + 1
         assert {workbook["CDRs"].cell(row, credit_column).value for row in (2, 3)} == {"CRED-001"}
+        assert {workbook["CDRs"].cell(row, trunk_column).value for row in (2, 3)} == {
+            "Troncal principal"
+        }
+        assert {workbook["CDRs"].cell(row, trunk_id_column).value for row in (2, 3)} == {
+            "default"
+        }
         workbook.close()
+
+        english_report = client.get(
+            "/api/traceability/report.xlsx",
+            params={"by": "credit", "query": "CRED-001", "lang": "en"},
+        )
+        english_workbook = load_workbook(io.BytesIO(english_report.content), read_only=True)
+        assert "Overview" in english_workbook.sheetnames
+        english_workbook.close()
 
         bundle = client.get(
             "/api/traceability/bundle.zip", params={"by": "credit", "query": "CRED-001"}
@@ -178,9 +223,20 @@ def test_exact_trace_report_and_recording_bundle(tmp_path):
             names = archive.namelist()
             assert "reporte-trazabilidad.xlsx" in names
             assert "manifest-grabaciones.csv" in names
-            assert len([name for name in names if name.startswith("grabaciones/")]) == 1
+            recordings = [name for name in names if name.startswith("grabaciones/")]
+            assert recordings == [f"grabaciones/{first['id']}.ogg"]
             manifest = archive.read("manifest-grabaciones.csv").decode("utf-8-sig")
+            assert "troncal,id_troncal" in manifest
+            assert "Troncal principal,default" in manifest
             assert "sin_grabacion" in manifest and "CRED-001" in manifest
+
+        english_bundle = client.get(
+            "/api/traceability/bundle.zip",
+            params={"by": "credit", "query": "CRED-001", "lang": "en"},
+        )
+        with ZipFile(io.BytesIO(english_bundle.content)) as archive:
+            assert "tracking-report.xlsx" in archive.namelist()
+            assert "recording-manifest.csv" in archive.namelist()
         with sqlite3.connect(app.state.analytics.path) as db:
             actions = {
                 row[0]

@@ -247,3 +247,19 @@ def test_import_requires_session_and_respects_origin_and_size(tmp_path):
             == 403
         )
         assert client.post(url, content=b"x" * 8_500_001, headers=headers).status_code == 413
+
+
+def test_english_required_headers_and_message_aliases_are_supported():
+    contacts = parse_contacts(
+        "Account,Phone,First name,Due date\nACC-42,2025550123,Ana,2026-09-10",
+        "US",
+    )
+    contact = contacts[0]
+    assert contact.credit_id == "ACC-42"
+    assert contact.phone == "12025550123"
+    assert contact.variables == {
+        "First name": "Ana",
+        "Due date": "2026-09-10",
+        "Account": "ACC-42",
+        "Phone": "12025550123",
+    }

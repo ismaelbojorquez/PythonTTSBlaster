@@ -18,6 +18,27 @@ crearlo. Las cuentas del panel son independientes de los usuarios Linux.
 Los usuarios se administran en **Operación → Usuarios**. Debe quedar un
 administrador activo. Los cambios de acceso revocan las sesiones correspondientes.
 
+## Idioma de la plataforma
+
+El selector **ES / EN** de la barra superior cambia toda la interfaz entre español
+e inglés. En la pantalla de acceso aparece el mismo selector con el nombre completo
+del idioma. La preferencia se guarda en ese navegador y se conserva para las
+siguientes sesiones. Al cambiarla se recuperan el módulo, la campaña y los campos
+que se estaban editando; las fechas y cantidades se vuelven a presentar con el
+formato regional correspondiente.
+
+Las descargas manuales de Excel, CDR y paquetes de trazabilidad usan el idioma
+seleccionado al generarse. Los nombres propios, mensajes y datos importados se
+conservan tal como fueron escritos.
+
+## Apariencia
+
+El botón de sol o luna está disponible junto al selector de idioma y también en
+la pantalla de acceso. Permite alternar inmediatamente entre los temas claro y
+oscuro. En la primera visita la plataforma sigue la apariencia configurada en el
+equipo; después conserva la elección en ese navegador. El cambio incluye
+formularios, tablas, gráficas, paneles de audio, estados y vistas móviles.
+
 ## Crear una campaña
 
 1. Abre **Campañas → Nueva campaña** y asigna un nombre.
@@ -43,7 +64,8 @@ Hola {nombre}. Te recordamos tu cita del {fecha}. Tu folio es {folio}.
 ```
 
 Las columnas `Credito` y `Telefono` son obligatorias en cada fila. También se
-reconocen `Crédito` y `Teléfono`, sin distinguir mayúsculas. El crédito se conserva
+reconocen `Crédito` y `Teléfono`, y en inglés `Account`, `Credit`, `Account ID`,
+`Phone` y `Telephone`, sin distinguir mayúsculas. El crédito se conserva
 como texto, incluidos sus ceros iniciales. Todas las demás columnas las defines tú y están disponibles como
 variables: no hay una lista fija de campos de la plataforma. Por ejemplo:
 
@@ -95,14 +117,23 @@ ambiguo o con longitud incorrecta se rechaza antes de crear la campaña y se
 identifica la fila del CSV. La validación del formato no verifica que exista la línea.
 
 Los números se guardan con el código internacional y sin `+`, también para
-`{telefono}`, el TTS, los CDR y las exportaciones. Las campañas existentes conservan
+`{telefono}` y `{phone}`. El identificador se ofrece como `{credito}`, `{credit}`,
+`{account}` o `{account_id}`. Estos valores se usan igual en el TTS, los CDR y las exportaciones. Las campañas existentes conservan
 sus números. Usa `sip.dial_format = "as_entered"` para destinos internacionales;
 consulta [configuración](configuration.md). La troncal debe admitir los destinos.
 El menú de opciones se agrega automáticamente. Los datos de ejemplo no son una
 lista para marcar por una troncal real.
 
 La [vista previa TTS](tts-preview.md) usa el primer contacto y no genera llamadas.
-En simulación necesita Piper y el modelo instalados para producir voz real.
+En simulación necesita una voz local instalada para producir audio real.
+Muestra cuánto tardó la generación, cuántos segundos de audio produjo y si la voz
+es recomendable para tiempo real en ese equipo.
+
+Los administradores pueden entrar a **Operación → Voces** para comparar todos los
+pares `.onnx`/`.onnx.json` del directorio configurado. **Medir rendimiento** usa
+una frase fija, entrega una muestra audible y conserva el resultado mientras la
+aplicación siga abierta. **Usar esta voz** la precarga, comprueba su rendimiento y
+persiste la ruta en `config.toml`. No se permite cambiarla con una campaña activa.
 
 ## Durante la campaña
 
@@ -180,7 +211,8 @@ editarla después no cambia campañas existentes.
 La ejecución se decide en **Nueva campaña → Cuándo ejecutar la campaña**:
 
 - **Guardar borrador** (predeterminado): conserva la campaña sin hacer llamadas.
-  Después abre su panel y pulsa **Iniciar llamadas** o **Iniciar simulación**.
+  Después abre su panel y pulsa **Iniciar llamadas**, **Iniciar simulación** o
+  **Programar** para asignarle una fecha, hora y zona sin volver a crearla.
 - **Iniciar ahora**: el botón **Crear e iniciar llamadas** (o simulación) guarda
   y arranca la campaña. Si otra campaña está activa o no hay troncal lista, se
   muestra el motivo y no se crea otra campaña. Si la troncal cambia justo después
@@ -194,6 +226,9 @@ La ejecución se decide en **Nueva campaña → Cuándo ejecutar la campaña**:
 La revisión del texto y del TTS está disponible antes de completar el horario.
 Las campañas programadas muestran **Programada** y su fecha/zona en el panel.
 Puedes cancelar el horario o iniciar antes con **Iniciar ahora y cancelar horario**.
+Desde el detalle, el botón **Programar** sólo aparece mientras la campaña continúe
+en borrador y tenga contactos pendientes. Guardar el horario registra el usuario,
+la fecha programada y la zona en la auditoría.
 **Operación → Historial de programación** permite consultar los resultados, abrir
 campañas y cancelar horarios pendientes; ya no contiene un formulario de creación.
 La API anterior de programación sigue disponible para integraciones existentes.
@@ -217,6 +252,12 @@ En **Llamadas**, abre una sesión para consultar sus tramos y cronología:
 - Respuesta del agente, duración del puente y cierre de cada tramo.
 - Actor observado del cierre: cliente, agente, operador, sistema o desconocido.
 
+La troncal de salida aparece en la tabla de llamadas, el detalle del contacto de
+la campaña y el CDR. Se muestra el nombre operativo junto con su identificador
+estable. Si hubo respaldo, **Tramos de la llamada** conserva cada INVITE y la
+troncal que lo originó. El tramo de transferencia identifica por separado la
+troncal utilizada para marcar al agente.
+
 Los roles de los tramos indican endpoints SIP; no identifican físicamente a la
 persona que colgó. Los registros antiguos con datos faltantes se muestran como
 tales y no reciben mediciones inventadas.
@@ -225,16 +266,20 @@ tales y no reciben mediciones inventadas.
 
 **Trazabilidad** busca un identificador exacto en todo el historial, sin limitarse
 a una campaña. Selecciona **Credito** o **Telefono** y escribe el valor. Para el
-teléfono puedes pegar `+`, espacios, guiones o paréntesis; la consulta utiliza el
-número internacional normalizado. El resultado reúne cada intento iniciado y
-muestra campaña, fecha, resultado y disponibilidad de grabación. Desde una fila
-puedes abrir el CDR completo.
+teléfono selecciona el país y escribe el número nacional sin prefijo internacional:
+en México, `5578564016` encuentra el número guardado como `525578564016`. También
+puedes pegar un número internacional completo con `+`, además de espacios, guiones
+o paréntesis. La consulta convierte el valor al mismo formato utilizado al marcar,
+sin hacer coincidencias parciales. El resultado reúne cada intento iniciado y
+muestra campaña, fecha, troncal de salida, resultado y disponibilidad de
+grabación. Desde una fila puedes abrir el CDR completo.
 
 **Descargar XLSX** genera el reporte analítico completo de ese identificador.
 **Descargar grabaciones + reporte** produce un ZIP con el mismo XLSX, los archivos
 Ogg Opus que continúan disponibles y `manifest-grabaciones.csv`. El manifiesto
-incluye todas las llamadas e indica cuáles no tuvieron grabación, vencieron o ya
-no tienen archivo; la descarga nunca oculta esas ausencias. Se aplica
+incluye todas las llamadas, la troncal y su ID, e indica cuáles no tuvieron
+grabación, vencieron o ya no tienen archivo; la descarga nunca oculta esas
+ausencias. Se aplica
 `report_max_rows` y no se entrega un subconjunto silencioso.
 
 Administradores y operadores pueden descargar el paquete de audio. Los analistas
@@ -249,6 +294,10 @@ contactos. Crea una campaña nueva con ambas columnas para marcarlos.
 **Reportes** exporta CSV o Excel con resumen, tendencia, resultados, campañas,
 CDRs, tramos, eventos y definiciones. Sólo se genera un reporte a la vez. Si se
 alcanza `report_max_rows`, reduce el período; no se entrega un archivo parcial.
+El CDR incluye nombre e ID de las troncales del cliente y de la transferencia.
+La hoja **Tramos** conserva la ruta de todos los intentos SIP, incluidos los que
+fallaron antes de cambiar a un respaldo. La exportación CSV de una campaña
+incluye la troncal final utilizada para cada intento.
 
 En **Operación → Reportes automáticos** programa Excel/CSV diario o semanal,
 con hora, zona y últimos N días completos. Los archivos se descargan desde el
@@ -271,12 +320,33 @@ con reproducción, pausa, avance y descarga. También está disponible en el CDR
 completo. Los administradores y operadores pueden escucharla; los analistas no.
 La grabación aparece al terminar la llamada y procesarse el audio. Mientras tanto
 se muestra su estado; las llamadas sin captura o con audio vencido lo indican.
+Cada archivo usa un nombre trazable con el formato
+`credito_telefono_AAAAMMDD_HHMMSS_mmm.ogg`; los caracteres no portables del
+crédito se normalizan y sólo se agrega un sufijo corto si existiera una colisión.
+El reproductor, la descarga individual y el ZIP masivo conservan ese nombre.
 La actualización de actividad conserva la reproducción; cambiar de contacto o
 sección la pausa. En simulación se etiqueta como
 sintético. El audio se elimina según retención/espacio y su CDR se conserva.
 
 Si falta espacio, se omite la captura y se genera una alerta; la llamada continúa.
 Consulta [administración](production.md) para respaldar tanto SQLite como los archivos.
+
+## Calibración temporal de AMD
+
+Los administradores pueden activar **Guardar temporalmente el saludo para
+calibración** en **Operación → Configuración**. Las llamadas nuevas guardan sólo
+el audio entrante que AMD utilizó antes del TTS, con un máximo inicial de 6.5
+segundos. Las grabaciones de conversación siguen separadas.
+
+Administradores y operadores revisan las muestras en **Operación → Calibración
+AMD**. Selecciona una fila, reproduce el saludo y elige **Es persona** o **Es
+buzón**. Los filtros permiten revisar pendientes, etiquetas y diferencias con la
+decisión automática. Los analistas no acceden a este audio.
+
+La captura, reproducción, etiqueta y eliminación quedan auditadas. El sistema
+elimina muestras por días y por cantidad según `[amd]`; también puedes borrar una
+o todas desde la bandeja. El CDR y el resultado AMD permanecen. Las etiquetas no
+ajustan reglas automáticamente: sirven como evidencia para calibrarlas después.
 
 ## Volver a ejecutar y duplicar
 

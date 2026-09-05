@@ -69,7 +69,10 @@ async def test_simultaneous_transfers_reserve_distinct_numbers_until_hangup(engi
     workbook = load_workbook(
         io.BytesIO(excel_report(rows, summary, events, Filters(mode="simulation")))
     )
-    assert {workbook["CDRs"].cell(i, 8).value for i in (2, 3)} == {A, B}
+    headers = {cell.value: cell.column for cell in workbook["CDRs"][1]}
+    assert {
+        workbook["CDRs"].cell(i, headers["Número agente"]).value for i in (2, 3)
+    } == {A, B}
     assert {
         e["data"]["number"]
         for e in analytics.detail(ids[0])["events"]

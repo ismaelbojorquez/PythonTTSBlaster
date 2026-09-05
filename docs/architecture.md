@@ -28,15 +28,23 @@ usa el puerto de micrófono/altavoz, y se activa un dispositivo nulo para el rel
 de medios. Una actualización de media intenta reconectar la pareja. REFER entrante
 se rechaza: sólo el scheduler puede originar llamadas.
 
-`PiperSpeech` carga un conjunto acotado de voces al iniciar y entrega cada voz a
-una sola inferencia a la vez. La síntesis ocurre en hilos de Python ajenos al hilo
-SIP. El WAV PCM de 16 bits puede tener la frecuencia original de la voz; PJMEDIA
+El motor de voz carga un conjunto acotado de generadores al iniciar y entrega cada
+uno a una sola inferencia a la vez. Piper trabaja en hilos; Kokoro se mantiene
+en procesos aislados para conservar sus dependencias y poder cerrarlos.
+La síntesis ocurre fuera del hilo SIP. El WAV PCM de 16 bits puede tener la frecuencia original de la voz; PJMEDIA
 lo convierte al reloj del códec negociado. El motor sintetiza el mensaje
 completo después de la respuesta, por lo que hay una espera proporcional a su
 longitud y a la carga. `tts_timeout` limita la espera lógica, pero una inferencia
 nativa en ejecución no se puede interrumpir: se espera su finalización antes de
 eliminar archivos. Una inferencia nativa que se bloquee requeriría reiniciar el
-proceso; el aislamiento de inferencia en procesos sería una ampliación futura.
+proceso. Los motores opcionales ya limitan ese riesgo mediante procesos separados.
+
+`VoiceManager` limita el catálogo al directorio del modelo activo, exige el par
+`.onnx`/`.onnx.json` y evita rutas fuera de ese directorio. Las comparaciones usan
+un texto fijo y miden carga, inferencia, duración WAV y factor de tiempo real. El
+cambio se realiza sin sesiones: primero carga y prueba el nuevo pool, después
+actualiza el TOML y sustituye la voz activa. Si falla la carga o la escritura, la
+voz anterior permanece activa.
 
 ## Estados
 
@@ -76,15 +84,23 @@ cuyo resultado o cierre se desconoce.
 `call_records` contiene una fila por sesión iniciada, `call_legs` separa el tramo
 cliente y el tramo agente, y `call_events` conserva la cronología estructurada.
 Las tablas originales `jobs` y `events` siguen siendo el estado operativo y su
-historial legible. El esquema actual es `PRAGMA user_version=7`: la migración de
-trazabilidad añade `credit_id` e índices por crédito y teléfono. Las filas previas
-conservan Crédito vacío y cualquier medida no observada permanece NULL.
+historial legible. El esquema actual es `PRAGMA user_version=8`: la migración de
+trazabilidad añade `credit_id` e índices por crédito y teléfono; la siguiente
+agrega el inventario de muestras temporales AMD. Las filas previas conservan
+Crédito vacío y cualquier medida no observada permanece NULL.
 
 Los callbacks de PJSUA2 producen eventos pequeños y los entregan al bucle asyncio;
 no escriben SQLite ni procesan informes en el hilo de medios. La respuesta y la
 terminación se derivan de estados/transacciones SIP. Los reportes abren una conexión
 SQLite de sólo lectura, fijan una instantánea y se generan con `asyncio.to_thread`.
-El audio de AMD continúa siendo efímero y no entra a la base ni a los reportes.
+Cada fila de `call_legs` conserva `trunk_id`; por eso un cambio a respaldo deja
+una ruta verificable por INVITE. Las consultas de CDR unen ese ID con el nombre
+actual de `trunks`, exponen ambos valores en el panel y exportan todos los tramos.
+El ID continúa disponible aunque el perfil se renombre o se deshabilite.
+El audio de AMD es efímero salvo que se active la calibración temporal. En ese
+caso SQLite guarda metadatos y etiquetas, mientras el WAV acotado permanece en
+`data/amd-calibration/` sujeto a retención y máximo de muestras. No entra a los
+reportes de llamadas ni se mezcla con las grabaciones de conversación.
 
 El pool reserva un destino antes de marcar al agente y despierta al planificador
 en cada cambio. Si la campaña activa tiene cero destinos libres, el planificador
@@ -109,12 +125,13 @@ No se utiliza REFER porque liberar las dos llamadas locales después de una
 transferencia depende del soporte y la política de la troncal. La consecuencia
 es explícita: dos canales y flujo RTP a través de la máquina hasta el cierre.
 
-El inicio de Piper precede al de SIP; la creación de la campaña valida todos los
+El inicio de la voz activa precede al de SIP; la creación de la campaña valida todos los
 datos antes de marcar. El panel web es un cliente ligero del mismo proceso y no
 tiene ninguna responsabilidad en la continuidad de las llamadas. SQLite guarda
 texto, huellas de contraseñas de usuarios y datos operativos. Las contraseñas SIP
-permanecen en TOML. El audio TTS es efímero; las grabaciones Opus se conservan
-según la política configurable y se sirven mediante un endpoint autenticado.
+permanecen en TOML. El audio TTS es efímero; las grabaciones Opus y las muestras
+AMD temporales tienen políticas independientes y se sirven mediante endpoints
+autenticados que excluyen al rol analista.
 
 
 ## Operación y acceso

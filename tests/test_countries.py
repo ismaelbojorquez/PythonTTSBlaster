@@ -5,7 +5,7 @@ from conftest import remove_retries_schema
 from fastapi.testclient import TestClient
 
 from blaster.config import Settings
-from blaster.countries import countries, international_number
+from blaster.countries import countries, history_phone_number, international_number
 from blaster.models import parse_contacts
 from blaster.preview import AudioPreviewInput
 from blaster.store import Store
@@ -32,6 +32,12 @@ from blaster.web import create_app
 def test_national_and_existing_international_numbers(region, entered, expected):
     assert international_number(entered, region) == expected
     assert international_number(expected, region) == expected
+
+
+def test_history_search_accepts_national_or_explicit_international_number():
+    assert history_phone_number("55 7856 4016", "MX") == "525578564016"
+    assert history_phone_number("+52 55 7856 4016", "US") == "525578564016"
+    assert history_phone_number("202 555 0123", "US") == "12025550123"
 
 
 @pytest.mark.parametrize(
@@ -171,6 +177,6 @@ def test_country_migration_preserves_old_numbers_and_does_not_invent_country(tmp
         campaign = store.campaign("c")
         assert campaign["agent_number"] == "999"
         assert campaign["country"] is None and campaign["agent_country"] is None
-        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 8
         store.close()
     assert len(list(tmp_path.glob("*.before-countries-*.bak"))) == 1

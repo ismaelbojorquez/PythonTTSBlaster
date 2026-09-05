@@ -48,11 +48,17 @@ def test_preview_uses_first_contact_menu_and_real_voice_path_without_creating_ca
         data = response.json()
         assert data["message"] == "Hola Ana, tu número es 525550000101."
         assert data["phone"] == "525550000101"
+        assert data["generation_ms"] >= 0
+        assert data["audio_seconds"] == 0.1
+        assert data["real_time_factor"] >= 0
+        assert data["recommendation"]["code"] == "recommended"
+        assert data["model_cached"] is False
         assert captured == [data["message"] + "\n" + MENU]
         with wave.open(io.BytesIO(base64.b64decode(data["audio_base64"]))) as wav:
             assert wav.getnframes() > 0 and any(wav.readframes(wav.getnframes()))
         # No campaign name, agent number, registration, campaign, or call is needed.
-        assert client.post("/api/preview/audio", json={"template": "Buen día"}).status_code == 200
+        cached = client.post("/api/preview/audio", json={"template": "Buen día"})
+        assert cached.status_code == 200 and cached.json()["model_cached"] is True
         assert len(loads) == 1
         assert client.get("/api/campaigns").json() == []
         assert client.get("/api/status").json()["active_sessions"] == 0

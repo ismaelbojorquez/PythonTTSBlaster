@@ -5,6 +5,13 @@ import pytest
 from blaster.config import Settings, load_settings
 
 
+def test_factory_capacity_allows_twenty_simultaneous_calls():
+    settings = Settings()
+    assert settings.concurrency == 20
+    assert settings.trunk_channels == 40
+    assert settings.trunk_profiles()[0].channels == 40
+
+
 def test_explicit_trunks_do_not_inherit_the_unused_legacy_rtp_limit():
     # A small old [sip] range must not prevent raising capacity after moving to [[trunks]].
     data = {

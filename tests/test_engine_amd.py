@@ -1,5 +1,6 @@
 import asyncio
 import json
+import wave
 
 import pytest
 from amd_samples import signal, silence
@@ -47,6 +48,36 @@ async def test_amd_human_continues_and_agent_leg_is_not_screened(engine):
     engine.simulate(jid, "agent_hangup")
     await until(lambda: not engine.sessions)
     assert engine.store.jobs(cid)[0]["status"] == "completed"
+
+
+async def test_amd_calibration_saves_only_the_initial_analysis_audio(engine):
+    engine.settings.amd = AMDSettings(
+        enabled=True,
+        calibration_capture_enabled=True,
+        calibration_retention_days=14,
+        calibration_max_samples=50,
+    )
+    cid = campaign(engine)
+    engine.start_campaign(cid)
+    jid = await menu(engine, cid)
+    row = engine.store.db.execute(
+        "SELECT * FROM amd_calibration_samples WHERE job_id=?", (jid,)
+    ).fetchone()
+    assert row is not None
+    assert row["duration_ms"] <= engine.settings.amd.total_analysis_ms
+    assert row["predicted_verdict"] == "human"
+    assert row["label"] is None
+    path = engine.amd_calibration.directory / row["filename"]
+    assert path.is_file()
+    with wave.open(str(path), "rb") as recording:
+        assert recording.getparams()[:3] == (1, 2, 8000)
+        assert recording.getnframes() * 1000 // recording.getframerate() == row["duration_ms"]
+    event = engine.store.db.execute(
+        "SELECT 1 FROM call_events WHERE job_id=? AND kind='amd_calibration_saved'", (jid,)
+    ).fetchone()
+    assert event
+    engine.simulate(jid, "hangup")
+    await until(lambda: not engine.sessions)
 
 
 @pytest.mark.parametrize("action", ["hangup", "continue"])

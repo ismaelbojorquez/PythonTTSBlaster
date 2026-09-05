@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Python, FastAPI, Uvicorn, SQLite, PJSUA2 embebido y Piper local. El navegador
+Python, FastAPI, Uvicorn, SQLite, PJSUA2 embebido y voces locales. El navegador
 presenta operación y analítica; el mismo proceso conserva la cola y las llamadas.
 Los gráficos se sirven localmente y los reportes Excel se generan en Python.
 
@@ -20,8 +20,12 @@ de llamadas, intentos, AMD, tiempos, enlaces y terminaciones para su análisis.
 
 ## Users
 
-Operadores de campañas en español, administradores de telefonía y analistas.
-Cada rol dispone de permisos propios en el panel y en la API.
+Operadores de campañas en español o inglés, administradores de telefonía y analistas.
+Cada rol dispone de permisos propios en el panel y en la API. La interfaz, las
+fechas, los números y las exportaciones manuales siguen el idioma elegido por
+cada navegador. La apariencia puede alternarse entre tema claro y oscuro; la
+primera visita sigue la preferencia del equipo y las elecciones posteriores se
+conservan localmente.
 
 ## Capabilities and Constraints
 
@@ -30,13 +34,16 @@ con distribución y respaldo. Dos canales reservados por sesión. Python conserv
 el puente de audio hasta el cierre; no se requiere una central externa.
 
 La aplicación y su control están escritos en Python con bibliotecas nativas
-para SIP y voz. Piper utiliza inferencia local; AMD aplica reglas acústicas sin
+para SIP y voz. Piper y Kokoro utilizan inferencia local; AMD aplica reglas acústicas sin
 modelos entrenados. La configuración y los secretos operativos se guardan en TOML;
 las cuentas web utilizan hashes de contraseña en SQLite.
 
 Incluye plantillas, vista previa TTS, agenda persistente, dashboard, CDR, Excel,
 reportes automáticos, alertas locales, roles, auditoría y grabación Ogg Opus desde
 evidencia humana. Las grabaciones requieren permisos y tienen retención configurable.
+AMD puede conservar temporalmente sólo el saludo analizado para que un operador
+lo escuche y lo etiquete como persona o buzón; la retención y el máximo de muestras
+son configurables y el audio puede eliminarse sin borrar el CDR.
 
 ## Operating Context
 

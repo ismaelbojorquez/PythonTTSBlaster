@@ -58,7 +58,7 @@ sudo bash scripts/install_ubuntu.sh
 Se bloquean las actualizaciones con el motor activo para evitar sustituir sus
 archivos mientras trabaja.
 
-## Falta PJSUA2, Piper o el modelo
+## Falta PJSUA2 o la voz local
 
 Ejecuta el instalador desde el checkout con el servicio detenido. Éste instala
 las dependencias, compila PJSUA2 y descarga el modelo que falta. Para desarrollo

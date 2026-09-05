@@ -15,39 +15,39 @@ from blaster.models import TERMINAL
 STATUS_LABELS = {
     "completed": "Finalizada",
     "machine": "Buzón probable",
-    "amd_unknown": "AMD incierto",
+    "amd_unknown": "Respuesta no identificada",
     "no_answer": "Sin respuesta",
     "no_input": "Sin selección",
     "busy": "Ocupada",
     "failed": "Fallida",
-    "temporary_error": "Fallo temporal de la troncal",
+    "temporary_error": "Proveedor no disponible",
     "cancelled": "Cancelada",
     "interrupted": "Interrumpida",
     "dialing": "Marcando",
-    "detecting": "Analizando saludo",
-    "synthesizing": "Generando voz",
-    "playing": "Reproduciendo",
-    "menu": "Esperando opción",
-    "agent_dialing": "Marcando agente",
+    "detecting": "Identificando respuesta",
+    "synthesizing": "Preparando mensaje",
+    "playing": "Mensaje en curso",
+    "menu": "Esperando respuesta",
+    "agent_dialing": "Contactando al agente",
     "agent_waiting": "Esperando agente libre",
     "bridged": "Con agente",
     "queued": "Pendiente",
 }
 ACTOR_LABELS = {
-    "customer": "Cliente (tramo remoto)",
-    "agent": "Agente (tramo remoto)",
-    "system": "Sistema",
-    "operator": "Operador local",
-    "trunk": "Troncal",
-    "unknown": "Desconocido",
+    "customer": "Cliente",
+    "agent": "Agente",
+    "system": "Plataforma",
+    "operator": "Operador",
+    "trunk": "Proveedor",
+    "unknown": "No identificado",
 }
 AMD_LABELS = {
-    "human": "Humano probable",
+    "human": "Persona probable",
     "machine": "Buzón probable",
-    "unknown": "Incierto",
-    "pending": "Sin resultado",
-    "disabled": "Desactivado",
-    "unmeasured": "Sin medición histórica",
+    "unknown": "Respuesta no identificada",
+    "pending": "Pendiente",
+    "disabled": "Sin evaluación",
+    "unmeasured": "Sin información anterior",
 }
 
 
@@ -145,7 +145,8 @@ RECORD_FIELDS = (
 SELECT = (
     "SELECT j.id,j.campaign_id,j.phone,j.credit_id,j.status,j.detail,j.started_at,j.ended_at,"
     "j.variables,j.message,j.contact_id,j.attempt_number,j.retry_of,j.available_at,"
-    "c.name AS campaign_name,c.mode,"
+    "c.name AS campaign_name,c.mode,ct.name AS customer_trunk_name,"
+    "agt.name AS agent_trunk_name,"
     "COALESCE(al.number,r.agent_selected_number,"
     "CASE WHEN r.version IS NULL THEN c.agent_number END) AS agent_number,"
     "r.agent_strategy,r.agent_pool_wait_seconds,r.version AS telemetry_version,"
@@ -164,6 +165,8 @@ SELECT = (
     "LEFT JOIN recordings rec ON rec.job_id=j.id "
     "LEFT JOIN call_legs cl ON cl.job_id=j.id AND cl.role='customer' "
     "LEFT JOIN call_legs al ON al.job_id=j.id AND al.role='agent' "
+    "LEFT JOIN trunks ct ON ct.id=cl.trunk_id "
+    "LEFT JOIN trunks agt ON agt.id=al.trunk_id "
 )
 
 
@@ -261,8 +264,16 @@ class Analytics:
                 raise KeyError(jid)
             result = decorate(row)
             result["attempts"] = [dict(x) for x in db.execute(
-                "SELECT id,credit_id,attempt_number,status,detail,started_at,ended_at,available_at "
-                "FROM jobs WHERE contact_id=? ORDER BY attempt_number", (row["contact_id"],),
+                "SELECT j2.id,j2.credit_id,j2.attempt_number,j2.status,j2.detail,"
+                "j2.started_at,j2.ended_at,j2.available_at,"
+                "(SELECT l.trunk_id FROM call_legs l WHERE l.job_id=j2.id "
+                "AND l.role='customer' ORDER BY l.created_at DESC LIMIT 1) "
+                "AS customer_trunk_id,"
+                "(SELECT t.name FROM call_legs l LEFT JOIN trunks t ON t.id=l.trunk_id "
+                "WHERE l.job_id=j2.id AND l.role='customer' "
+                "ORDER BY l.created_at DESC LIMIT 1) AS customer_trunk_name "
+                "FROM jobs j2 WHERE j2.contact_id=? ORDER BY j2.attempt_number",
+                (row["contact_id"],),
             )]
             decision = db.execute(
                 "SELECT reason,next_job_id,created_at FROM retry_decisions WHERE job_id=?", (jid,),
@@ -273,7 +284,10 @@ class Analytics:
             result["legs"] = [
                 dict(x)
                 for x in db.execute(
-                    "SELECT * FROM call_legs WHERE job_id=? ORDER BY created_at", (jid,)
+                    "SELECT l.*,t.name AS trunk_name FROM call_legs l "
+                    "LEFT JOIN trunks t ON t.id=l.trunk_id "
+                    "WHERE l.job_id=? ORDER BY l.created_at",
+                    (jid,),
                 )
             ]
             result["events"] = [
@@ -318,7 +332,8 @@ class Analytics:
             for row in rows:
                 row["_legs"] = []
             for leg in db.execute(
-                "SELECT l.* FROM call_legs l JOIN jobs j ON j.id=l.job_id "
+                "SELECT l.*,t.name AS trunk_name FROM call_legs l "
+                "LEFT JOIN trunks t ON t.id=l.trunk_id JOIN jobs j ON j.id=l.job_id "
                 "JOIN campaigns c ON c.id=j.campaign_id WHERE " + where + " ORDER BY l.created_at",
                 values,
             ):

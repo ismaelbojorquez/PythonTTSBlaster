@@ -26,7 +26,7 @@ from blaster.analytics import Analytics, Filters
 from blaster.automation import Automation, campaign_due_at
 from blaster.config import Settings
 from blaster.contact_files import import_contacts, read_csv
-from blaster.countries import countries, country_code
+from blaster.countries import countries, country_code, history_phone_number
 from blaster.dialing import format_dial_number
 from blaster.engine import Engine
 from blaster.management import management_router, write_config
@@ -34,7 +34,6 @@ from blaster.models import (
     MENU,
     CampaignInput,
     parse_contacts,
-    phone_number,
     render_message,
     transfer_numbers,
 )
@@ -45,7 +44,8 @@ from blaster.security import Security
 from blaster.store import Store, now
 from blaster.telephony.simulated import SimulatedTelephony
 from blaster.traceability import build_recording_bundle
-from blaster.tts import PiperSpeech, SimulatedSpeech
+from blaster.tts import SimulatedSpeech, close_speech, speech_for
+from blaster.voices import VoiceManager
 
 STATIC = Path(__file__).parent / "static"
 
@@ -128,7 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 from blaster.telephony.pjsua import PJSUATelephony
 
                 phone = PJSUATelephony(settings)
-                speech = PiperSpeech(settings.voice_model, settings.tts_workers)
+                speech = speech_for(settings)
             else:
                 phone = SimulatedTelephony()
                 speech = SimulatedSpeech()
@@ -142,6 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.speech_preview = SpeechPreview(
                 settings, speech if settings.mode == "sip" else None
             )
+            app.state.voice_manager = VoiceManager(settings)
             automation = Automation(settings, engine, app.state.analytics, report_lock)
             app.state.automation = automation
             await automation.start()
@@ -149,6 +150,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             if automation:
                 await automation.close()
+            preview_speech = getattr(getattr(app.state, "speech_preview", None), "speech", None)
+            if preview_speech is not None and (
+                engine is None or preview_speech is not engine.speech
+            ):
+                await close_speech(preview_speech)
             if engine:
                 await engine.close()
             if store:
@@ -196,7 +202,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not user:
                     return JSONResponse({"detail": "Inicia sesión para continuar"}, status_code=401)
                 admin = path.startswith(
-                    ("/api/manage/users", "/api/manage/audit", "/api/manage/config")
+                    (
+                        "/api/manage/users",
+                        "/api/manage/audit",
+                        "/api/manage/config",
+                        "/api/manage/voices",
+                    )
                 ) or (
                     (path.startswith("/api/manage/trunks") or path == "/api/settings")
                     and request.method != "GET"
@@ -205,6 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if (
                     (admin and user["role"] != "admin")
                     or (readonly and path.startswith("/api/recordings/"))
+                    or (readonly and path.startswith("/api/amd-calibration"))
                     or (readonly and path.startswith("/api/traceability/bundle"))
                     or (
                         readonly
@@ -326,12 +338,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def trace_filters(
         by: Literal["credit", "phone"],
         query: str = Query(min_length=1, max_length=255),
+        country: str = Query(default="MX", min_length=2, max_length=2),
     ) -> Filters:
         value = unicodedata.normalize("NFC", query.strip())
         if not value:
             raise ValueError("Escribe el Credito o Telefono que deseas consultar")
         if by == "phone":
-            value = phone_number(value)
+            value = history_phone_number(value, country)
         elif any(ord(character) < 32 for character in value):
             raise ValueError("Credito contiene caracteres no válidos")
         result = Filters(
@@ -356,7 +369,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     report_lock = asyncio.Lock()
 
     @app.get("/api/reports/{format}")
-    async def report(format: Literal["xlsx", "csv"], selected: Filters = selected_filters):
+    async def report(
+        format: Literal["xlsx", "csv"],
+        selected: Filters = selected_filters,
+        lang: Literal["es", "en"] = Query(default="es"),
+    ):
         if report_lock.locked():
             raise HTTPException(409, "Ya se está preparando un reporte. Espera a que termine.")
 
@@ -365,7 +382,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 selected, settings.report_max_rows
             )
             return (
-                excel_report(rows, summary, events, selected) if format == "xlsx" else cdr_csv(rows)
+                excel_report(rows, summary, events, selected, lang)
+                if format == "xlsx"
+                else cdr_csv(rows, lang)
             )
 
         async with report_lock:
@@ -390,7 +409,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/api/traceability/report.xlsx")
-    async def traceability_report(request: Request, selected: Filters = selected_trace):
+    async def traceability_report(
+        request: Request,
+        selected: Filters = selected_trace,
+        lang: Literal["es", "en"] = Query(default="es"),
+    ):
         if report_lock.locked():
             raise HTTPException(409, "Ya se está preparando un reporte. Espera a que termine.")
 
@@ -398,7 +421,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rows, summary, events = app.state.analytics.report_data(
                 selected, settings.report_max_rows
             )
-            return excel_report(rows, summary, events, selected), len(rows)
+            return excel_report(rows, summary, events, selected, lang), len(rows)
 
         async with report_lock:
             content, count = await asyncio.to_thread(generate)
@@ -418,7 +441,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/api/traceability/bundle.zip")
-    async def traceability_bundle(request: Request, selected: Filters = selected_trace):
+    async def traceability_bundle(
+        request: Request,
+        selected: Filters = selected_trace,
+        lang: Literal["es", "en"] = Query(default="es"),
+    ):
         if report_lock.locked():
             raise HTTPException(409, "Ya se está preparando una descarga. Espera a que termine.")
         report_dir = settings.data_dir / "reports"
@@ -433,9 +460,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rows, summary, events = app.state.analytics.report_data(
                 selected, settings.report_max_rows
             )
-            xlsx = excel_report(rows, summary, events, selected)
+            xlsx = excel_report(rows, summary, events, selected, lang)
             return build_recording_bundle(
-                target, rows, xlsx, app.state.engine.recordings.directory
+                target, rows, xlsx, app.state.engine.recordings.directory, lang
             )
 
         try:
@@ -547,7 +574,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "phone": c.phone,
                     "message": render_message(
                         campaign.template,
-                        {**c.variables, "telefono": c.phone, "credito": c.credit_id},
+                        {
+                            **c.variables,
+                            "telefono": c.phone,
+                            "phone": c.phone,
+                            "telephone": c.phone,
+                            "credito": c.credit_id,
+                            "credit": c.credit_id,
+                            "account": c.credit_id,
+                            "account_id": c.credit_id,
+                        },
                     ),
                 }
                 for c in campaign.contacts[:3]
@@ -571,7 +607,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def preview_audio(payload: AudioPreviewInput):
         message, phone = payload.sample()
         service = app.state.speech_preview
-        if service.lock.locked():
+        if service.lock.locked() or app.state.voice_manager.lock.locked():
             raise HTTPException(429, "Ya se está generando una muestra. Espera e intenta de nuevo.")
         async with service.lock:
             try:
@@ -699,11 +735,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output = io.StringIO()
         writer = csv.writer(output)
         columns = [
-            "credit_id", "phone", "status", "detail", "started_at", "ended_at", "id",
-            "contact_id", "attempt_number", "retry_of", "available_at",
+            "credit_id", "phone", "customer_trunk_name", "customer_trunk_id", "status",
+            "detail", "started_at", "ended_at", "id", "contact_id", "attempt_number",
+            "retry_of", "available_at",
         ]
-        writer.writerow(["credito", "telefono", "estado", "detalle", "inicio", "fin", "id_llamada",
-                         "id_contacto", "intento", "intento_anterior", "disponible_desde"])
+        writer.writerow([
+            "credito", "telefono", "troncal", "id_troncal", "estado", "detalle", "inicio",
+            "fin", "id_llamada", "id_contacto", "intento", "intento_anterior",
+            "disponible_desde",
+        ])
         for row in app.state.store.jobs(cid, limit=100000, latest=False):
             values = [str(row[column] or "") for column in columns]
             # Preserve telephone numbers and prevent spreadsheet formula interpretation.

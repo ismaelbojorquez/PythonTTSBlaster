@@ -73,6 +73,9 @@ class Store:
         from blaster.traceability import migrate as migrate_traceability
 
         migrate_traceability(self.db, path)
+        from blaster.amd_calibration import migrate as migrate_amd_calibration
+
+        migrate_amd_calibration(self.db, path)
 
     def _migrate_agent_pool(self, path: Path) -> None:
         if self.db.execute("PRAGMA user_version").fetchone()[0] >= 4:
@@ -125,7 +128,7 @@ class Store:
             self.db.execute("PRAGMA user_version=3")
 
     def _migrate_analytics(self, path: Path) -> None:
-        if self.db.execute("PRAGMA user_version").fetchone()[0] > 7:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] > 8:
             raise RuntimeError("La base requiere una versión más reciente de Blaster")
         if self.db.execute("PRAGMA user_version").fetchone()[0] >= 2:
             return
@@ -283,7 +286,16 @@ class Store:
                         json.dumps(c.variables, ensure_ascii=False),
                         render_message(
                             payload.template,
-                            {**c.variables, "telefono": c.phone, "credito": c.credit_id},
+                            {
+                                **c.variables,
+                                "telefono": c.phone,
+                                "phone": c.phone,
+                                "telephone": c.phone,
+                                "credito": c.credit_id,
+                                "credit": c.credit_id,
+                                "account": c.credit_id,
+                                "account_id": c.credit_id,
+                            },
                         ),
                         timestamp,
                     )
@@ -346,7 +358,18 @@ class Store:
 
     def jobs(self, cid: str, limit: int = 200, offset: int = 0, *, latest=True) -> list[dict]:
         rows = self.db.execute(
-            "SELECT j.* FROM jobs j WHERE campaign_id=? "
+            "SELECT j.*,"
+            "(SELECT l.trunk_id FROM call_legs l WHERE l.job_id=j.id AND l.role='customer' "
+            "ORDER BY l.created_at DESC LIMIT 1) AS customer_trunk_id,"
+            "(SELECT t.name FROM call_legs l LEFT JOIN trunks t ON t.id=l.trunk_id "
+            "WHERE l.job_id=j.id AND l.role='customer' "
+            "ORDER BY l.created_at DESC LIMIT 1) AS customer_trunk_name,"
+            "(SELECT l.trunk_id FROM call_legs l WHERE l.job_id=j.id AND l.role='agent' "
+            "ORDER BY l.created_at DESC LIMIT 1) AS agent_trunk_id,"
+            "(SELECT t.name FROM call_legs l LEFT JOIN trunks t ON t.id=l.trunk_id "
+            "WHERE l.job_id=j.id AND l.role='agent' "
+            "ORDER BY l.created_at DESC LIMIT 1) AS agent_trunk_name "
+            "FROM jobs j WHERE campaign_id=? "
             + (f"AND {LATEST_JOB} " if latest else "")
             + "ORDER BY (SELECT rowid FROM jobs root WHERE root.id=j.contact_id),"
             "attempt_number LIMIT ? OFFSET ?",

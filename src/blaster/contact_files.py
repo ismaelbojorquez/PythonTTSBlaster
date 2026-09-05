@@ -26,16 +26,24 @@ def column_name(value: str) -> str:
 
 
 def phone_column(headers: list[str]) -> str:
-    matches = [h for h in headers if h.casefold() in {"telefono", "teléfono"}]
+    aliases = {"telefono", "teléfono", "phone", "telephone"}
+    matches = [h for h in headers if h.casefold() in aliases]
     if len(matches) != 1:
-        raise ValueError("Incluye una sola columna telefono (también se admite Teléfono)")
+        raise ValueError(
+            "Incluye una sola columna Telefono/Phone "
+            "(también se admiten Teléfono y Telephone)"
+        )
     return matches[0]
 
 
 def credit_column(headers: list[str]) -> str:
-    matches = [h for h in headers if h.casefold() in {"credito", "crédito"}]
+    aliases = {"credito", "crédito", "credit", "account", "account_id"}
+    matches = [h for h in headers if h.casefold() in aliases]
     if len(matches) != 1:
-        raise ValueError("Incluye una sola columna Credito (también se admite Crédito)")
+        raise ValueError(
+            "Incluye una sola columna Credito/Account "
+            "(también se admiten Crédito, Credit y Account ID)"
+        )
     return matches[0]
 
 

@@ -214,6 +214,6 @@ def test_v4_migration_preserves_existing_jobs_and_only_backs_up_once(tmp_path):
         store = Store(path)
         assert store.jobs(cid) == before
         assert store.history.history(cid)["items"][0]["actor_name"] is None
-        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 8
         store.close()
     assert len(list(tmp_path.glob("*.before-executions-*.bak"))) == 1

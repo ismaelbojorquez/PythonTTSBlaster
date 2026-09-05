@@ -1,8 +1,10 @@
-export const strategyNames = {round_robin:"Rotación en orden",random:"Aleatoria",priority:"Prioridad de lista"};
+import { t, translateText } from "./i18n.js";
+
+export const strategyNames = {round_robin:t("Rotación en orden"),random:t("Aleatoria"),priority:t("Prioridad de lista")};
 export const strategyHelp = {
-  round_robin:"Continúa desde el siguiente número y omite los ocupados.",
-  random:"Elige al azar entre los teléfonos libres; un número puede repetirse después de quedar disponible.",
-  priority:"Elige el primer teléfono libre según el orden de la lista."
+  round_robin:t("Continúa desde el siguiente número y omite los ocupados."),
+  random:t("Elige al azar entre los teléfonos libres; un número puede repetirse después de quedar disponible."),
+  priority:t("Elige el primer teléfono libre según el orden de la lista.")
 };
 
 export function installAgentPool() {
@@ -20,13 +22,13 @@ export function renderAgentPool(campaign, status, escape, setHTML) {
     ? status.agent_pool.free
     : numbers.filter(n => !busy.has(n)).length;
   const waiting = campaign.counts.agent_waiting || 0;
-  document.querySelector("#transfer-summary").textContent = `Pool de transferencia · ${free} de ${numbers.length} libres${waiting ? ` · ${waiting} en espera` : ""}`;
+  document.querySelector("#transfer-summary").textContent = translateText(`Disponibilidad de agentes · ${free} de ${numbers.length} libres${waiting ? ` · ${waiting} en espera` : ""}`);
   document.querySelector("#transfer-policy").textContent = selectedIsActive && status.origination_paused
-    ? "Blaster pausado automáticamente: no se originan contactos nuevos hasta que se libere un teléfono de transferencia."
-    : `${strategyNames[campaign.agent_strategy] || strategyNames.round_robin} · Espera máxima ${campaign.agent_pool_wait ?? 30} s si todos están ocupados. Ocupación gestionada por Blaster.`;
-  const labels = {bridged:"En conversación",closing:"Esperando confirmación de cierre"};
+    ? t("La campaña se pausó automáticamente hasta que un agente quede disponible.")
+    : translateText(`${strategyNames[campaign.agent_strategy] || strategyNames.round_robin} · Espera máxima ${campaign.agent_pool_wait ?? 30} s cuando todos están ocupados.`);
+  const labels = {bridged:t("En conversación"),closing:t("Esperando confirmación de cierre")};
   setHTML(document.querySelector("#transfer-numbers"), numbers.map(number => {
     const reservation = busy.get(number);
-    return `<li><span>${escape(number)}</span><span class="badge ${reservation ? "agent_dialing" : "live"}">${reservation ? labels[reservation.state] || "Reservado" : "Libre"}</span></li>`;
+    return `<li><span>${escape(number)}</span><span class="badge ${reservation ? "agent_dialing" : "live"}">${reservation ? labels[reservation.state] || t("Reservado") : t("Libre")}</span></li>`;
   }).join(""));
 }

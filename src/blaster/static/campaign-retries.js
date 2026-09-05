@@ -1,17 +1,19 @@
+import { locale, t, translateHTML, translateText } from "./i18n.js";
+
 const $ = selector => document.querySelector(selector);
-const outcomes = {no_answer:"Sin respuesta", busy:"Ocupado", machine:"Buzón probable", amd_unknown:"AMD incierto", temporary_error:"Fallo temporal de la troncal"};
+const outcomes = Object.fromEntries(Object.entries({no_answer:"Sin respuesta", busy:"Ocupado", machine:"Buzón probable", amd_unknown:"Respuesta no identificada", temporary_error:"Proveedor no disponible"}).map(([key,value])=>[key,t(value)]));
 const defaults = {max_attempts:1, delay_seconds:300, outcomes:["no_answer", "busy", "machine", "amd_unknown"]};
 let context;
 
 export function retryDescription(policy = defaults) {
-  if (policy.max_attempts === 1) return "Un intento por contacto · sin reintentos automáticos";
+  if (policy.max_attempts === 1) return t("Un intento por contacto · sin reintentos automáticos");
   const seconds = policy.delay_seconds;
   const wait = seconds % 3600 === 0 ? `${seconds / 3600} h` : seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
-  return `Hasta ${policy.max_attempts} llamadas por contacto · ${wait} entre intentos`;
+  return translateText(`Hasta ${policy.max_attempts} llamadas por contacto · ${wait} entre intentos`);
 }
 
 export function retryDate(value) {
-  return value ? new Date(value).toLocaleString("es-MX", {dateStyle:"short", timeStyle:"medium"}) : "";
+  return value ? new Date(value).toLocaleString(locale(), {dateStyle:"short", timeStyle:"medium"}) : "";
 }
 
 function fields(prefix) {
@@ -39,8 +41,8 @@ function update(root) {
   const policy = readRetryPolicy(root), enabled = policy.max_attempts > 1;
   for (const field of root.querySelectorAll('[data-retry]:not([data-retry="attempts"])')) field.disabled = !enabled;
   const delay = root.querySelector('[data-retry="delay"]');
-  delay.setCustomValidity(enabled && policy.delay_seconds > 604800 ? "La espera máxima es de 7 días." : "");
-  root.querySelector('[data-retry="outcome"]').setCustomValidity(enabled && !policy.outcomes.length ? "Selecciona al menos un resultado para reintentar." : "");
+  delay.setCustomValidity(enabled && policy.delay_seconds > 604800 ? t("La espera máxima es de 7 días.") : "");
+  root.querySelector('[data-retry="outcome"]').setCustomValidity(enabled && !policy.outcomes.length ? t("Selecciona al menos un resultado para reintentar.") : "");
   root.querySelector(".retry-description").textContent = retryDescription(policy);
 }
 
@@ -56,9 +58,9 @@ function setPolicy(root, policy) {
 export function renderCampaignRetries(campaign) {
   const policy = campaign.retry_policy || defaults;
   $("#retry-policy-summary").textContent = retryDescription(policy);
-  $("#retry-policy-outcomes").textContent = policy.max_attempts > 1 ? `Reintentar: ${policy.outcomes.map(value => outcomes[value]).join(", ")}.` : "Puedes configurar los reintentos mientras la campaña sea un borrador.";
+  $("#retry-policy-outcomes").textContent = policy.max_attempts > 1 ? translateText(`Reintentar: ${policy.outcomes.map(value => outcomes[value]).join(", ")}.`) : t("Puedes configurar los reintentos mientras la campaña sea un borrador.");
   const summary = campaign.retry_summary;
-  $("#retry-pending").textContent = summary?.pending ? `${summary.pending} reintentos pendientes. Próximo disponible: ${retryDate(summary.next_at)} (hora de este equipo).${campaign.status === "paused" ? " Reanuda la campaña para continuar." : ""}` : "";
+  $("#retry-pending").textContent = summary?.pending ? translateText(`${summary.pending} reintentos pendientes. Próximo disponible: ${retryDate(summary.next_at)} (hora de este equipo).${campaign.status === "paused" ? " Reanuda la campaña para continuar." : ""}`) : "";
   const form = $("#retry-policy-form"), editable = campaign.status === "draft" && context.state.user?.role !== "analyst";
   form.hidden = !editable;
   $("#retry-policy-locked").hidden = editable;
@@ -73,7 +75,7 @@ export function renderCampaignRetries(campaign) {
 export function installCampaignRetries(value) {
   context = value;
   for (const [selector,prefix] of [["#creator-retries","create-retry"],["#detail-retry-fields","edit-retry"]]) {
-    const root = $(selector); root.innerHTML = fields(prefix);
+    const root = $(selector); root.innerHTML = translateHTML(fields(prefix));
     root.addEventListener("input", () => update(root));
     root.addEventListener("change", () => update(root));
     update(root);
@@ -86,7 +88,7 @@ export function installCampaignRetries(value) {
       try {
         await context.api(`/api/campaigns/${cid}/retries`, policy);
         await context.refresh();
-        $("#retry-policy-result").textContent = "Configuración de reintentos guardada.";
+        $("#retry-policy-result").textContent = t("Configuración de reintentos guardada.");
       } catch (error) { $("#retry-policy-result").textContent = error.message; }
     }, event.submitter);
   });

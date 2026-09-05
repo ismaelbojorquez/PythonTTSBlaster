@@ -22,7 +22,10 @@ def main() -> None:
         settings = load_settings(args.config)
         if settings.mode == "sip":
             settings.validate_live()
-            for module in ("pjsua2", "piper"):
+            modules = ["pjsua2"]
+            if settings.tts_engine == "piper":
+                modules.append("piper")
+            for module in modules:
                 if importlib.util.find_spec(module) is None:
                     raise ValueError(f"Falta el módulo {module}. Consulta README.md")
         if args.check:

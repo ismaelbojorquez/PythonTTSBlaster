@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {readRetryPolicy, retryDescription} from "../src/blaster/static/campaign-retries.js";
+globalThis.localStorage = {getItem: () => "es"};
+const {readRetryPolicy, retryDescription} = await import("../src/blaster/static/campaign-retries.js");
 
 test("disabling retries permits saving even after an invalid wait was entered", () => {
   const values = {attempts:"1", delay:"", unit:"3600"};

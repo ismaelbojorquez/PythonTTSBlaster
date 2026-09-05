@@ -5,8 +5,8 @@ web_public_url = "" # acceso local por HTTP, sin dominio
 data_dir = "data"
 reporting_timezone = "America/Mexico_City"
 report_max_rows = 20000
-concurrency = 3
-trunk_channels = 10 # cada sesión reserva 2 para poder llamar al agente
+concurrency = 20
+trunk_channels = 40 # 20 sesiones; cada una reserva 2 canales para poder transferir
 calls_per_second = 1.0
 ring_timeout = 40.0
 agent_timeout = 30.0
@@ -15,14 +15,25 @@ max_call_seconds = 1800.0
 max_repeats = 2
 tts_workers = 2
 tts_timeout = 90.0
-voice_model = "voices/es_MX-claude-high.onnx" # Piper mexicano: mejor latencia medida
+tts_engine = "piper" # "kokoro" activa sus voces comerciales después de medirlas
+voice_model = "voices/es_MX-claude-high.onnx" # voz activa; compárala en Operación → Voces
 routing = "priority"
+
+[kokoro]
+enabled = false # ejecutar scripts/install_kokoro_experiment.sh antes de activarlo
+python = ".venv-kokoro/bin/python"
+model = ".cache/kokoro/models/kokoro-v1.0.onnx"
+voices = ".cache/kokoro/models/voices-v1.0.bin"
+voice = "ef_dora" # ef_dora, em_alex o em_santa
+language = "es"
+speed = 1.0
+startup_timeout = 90.0
 
 [amd]
 enabled = true # análisis local por señales, sin IA; sólo en la llamada al contacto
-unknown_action = "continue" # sólo se cuelga con evidencia de buzón; los inciertos continúan
-total_analysis_ms = 5000 # máximo estricto; termina antes cuando hay evidencia suficiente
-initial_silence_ms = 3500 # margen para quien tarda en saludar; silencio sigue siendo INCIERTO
+unknown_action = "hangup" # los resultados inciertos se cuelgan antes del TTS
+total_analysis_ms = 6500 # máximo estricto; termina antes cuando hay evidencia suficiente
+initial_silence_ms = 5000 # permite un saludo tardío; silencio sigue siendo INCIERTO
 after_greeting_silence_ms = 1400 # no confundir tan pronto una pausa del buzón con humano
 greeting_speech_ms = 3200 # permite saludos humanos más largos
 minimum_word_ms = 140 # descarta ráfagas/clics más cortos
@@ -36,6 +47,9 @@ beep_min_hz = 600
 beep_max_hz = 2000
 beep_purity = 0.92
 beep_frequency_tolerance_hz = 35
+calibration_capture_enabled = false # actívalo temporalmente para etiquetar saludos
+calibration_retention_days = 14
+calibration_max_samples = 500
 
 [sip]
 domain = "sip.proveedor.example"

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from blaster.agent_pool import AgentPool
 from blaster.amd import DETECTOR_VERSION, detect
+from blaster.amd_calibration import AMDCalibration
 from blaster.config import Settings
 from blaster.diagnostics import error_detail
 from blaster.dialing import DialingError, format_dial_number
@@ -21,7 +22,7 @@ from blaster.routing import TrunkRouter
 from blaster.store import Store
 from blaster.telemetry import CallTrace
 from blaster.telephony.base import CallEnded, CallProgress, Leg, Telephony, first
-from blaster.tts import write_tone
+from blaster.tts import close_speech, write_tone
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class Engine:
         self.ops = Operations(store)
         self.router = TrunkRouter(settings, self.ops, telephony)
         self.recordings = Recordings(settings, self.ops, telephony)
+        self.amd_calibration = AMDCalibration(settings, store)
         self.agent_pool = AgentPool(store, self.wakeup.set)
 
     def _track_leg(self, leg):
@@ -76,6 +78,7 @@ class Engine:
                 shutil.rmtree(child)
         self.store.recover()
         self.recordings.recover()
+        self.amd_calibration.prune()
         write_tone(self.tone)
         await self.speech.start()
         await self.telephony.start()
@@ -93,6 +96,7 @@ class Engine:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self.telephony.stop()
+        await close_speech(self.speech)
         await self.agent_pool.close()
 
     def configure_concurrency(self, value: int) -> None:
@@ -433,7 +437,10 @@ class Engine:
         if self.settings.amd.enabled:
             self._state(session, "detecting", "Analizando el saludo antes de reproducir el mensaje")
             amd_settings = self.settings.amd.model_copy(deep=True)
-            result = await detect(customer, amd_settings)
+            calibration_pcm = (
+                bytearray() if amd_settings.calibration_capture_enabled else None
+            )
+            result = await detect(customer, amd_settings, capture_pcm=calibration_pcm)
             self.store.update_call(
                 session.job["id"],
                 amd_verdict=result.verdict,
@@ -448,6 +455,20 @@ class Engine:
                 audio_ms=result.audio_ms, voiced_ms=result.voiced_ms, words=result.words,
                 detector_version=DETECTOR_VERSION, parameters=amd_settings.model_dump(),
             )
+            if calibration_pcm:
+                sample_id = self.amd_calibration.save(
+                    session.job,
+                    result,
+                    bytes(calibration_pcm),
+                    DETECTOR_VERSION,
+                    amd_settings.model_dump(),
+                )
+                if sample_id:
+                    session.trace.event(
+                        "amd_calibration_saved",
+                        sample_id=sample_id,
+                        duration_ms=len(calibration_pcm) * 1000 // (8000 * 2),
+                    )
             log.info("%s; trabajo=%s", result.detail, session.job["id"])
             if result.verdict == "machine":
                 self._state(

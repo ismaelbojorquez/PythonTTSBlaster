@@ -1,3 +1,5 @@
+import { getLanguage, t, translateText } from "./i18n.js";
+
 export function installContactImport({api, expireSession, clearAudioPreview}) {
   const $ = selector => document.querySelector(selector);
   const contacts = $("#contacts"), fileInput = $("#csv-file"), message = $("#message");
@@ -6,7 +8,7 @@ export function installContactImport({api, expireSession, clearAudioPreview}) {
   let revision = 0, timer, sourceFile = null;
 
   function clearPreview() {
-    $("#message-preview").textContent = "Revisa o escucha el mensaje con los datos actualizados.";
+    $("#message-preview").textContent = t("Revisa o escucha el mensaje con los datos actualizados.");
     $("#preview-result").textContent = "";
   }
   function showVariables(data) {
@@ -17,14 +19,14 @@ export function installContactImport({api, expireSession, clearAudioPreview}) {
       const token = `{${variable.name}}`;
       const label = document.createElement("code"); label.textContent = token;
       const sample = document.createElement("span");
-      sample.textContent = variable.sample || "Sin valor en la primera fila";
-      button.title = `Insertar ${token}. Ejemplo: ${sample.textContent}`;
-      button.setAttribute("aria-label", `Insertar ${token}`);
+      sample.textContent = variable.sample || t("Sin valor en la primera fila");
+      button.title = translateText(`Insertar ${token}. Ejemplo: ${sample.textContent}`);
+      button.setAttribute("aria-label", translateText(`Insertar ${token}`));
       button.append(label, sample);
       button.addEventListener("click", () => {
         const start = message.selectionStart, end = message.selectionEnd;
         if (message.value.length - (end - start) + token.length > message.maxLength) {
-          status.textContent = "El mensaje admite hasta 4000 caracteres. Acórtalo para insertar la variable.";
+          status.textContent = t("El mensaje admite hasta 4000 caracteres. Acórtalo para agregar este dato.");
           return;
         }
         message.setRangeText(token, start, end, "end");
@@ -40,13 +42,13 @@ export function installContactImport({api, expireSession, clearAudioPreview}) {
     clearTimeout(timer); clearPreview(); showVariables({variables:[]});
     contacts.setCustomValidity("");
     if (!contacts.value.trim()) { status.textContent = ""; return; }
-    status.textContent = "Leyendo encabezados…";
+    status.textContent = t("Revisando datos…");
     timer = setTimeout(async () => {
       try {
         const data = await api("/api/contacts/inspect", {csv_text:contacts.value});
         if (current !== revision) return;
         showVariables(data);
-        status.textContent = `${data.count} contactos · ${data.variables.length} columnas disponibles. Revisa la personalización para validar los teléfonos y el mensaje.`;
+        status.textContent = translateText(`${data.count} contactos · ${data.variables.length} datos disponibles. Revisa la personalización para validar los teléfonos y el mensaje.`);
       } catch (error) {
         if (current === revision) status.textContent = error.message;
       }
@@ -58,20 +60,20 @@ export function installContactImport({api, expireSession, clearAudioPreview}) {
     const current = ++revision;
     clearTimeout(timer);
     // A failed replacement must not silently leave the previous recipients ready to send.
-    contacts.setCustomValidity("Importa un archivo válido o edita los contactos para continuar.");
+    contacts.setCustomValidity(t("Importa un archivo válido o edita los contactos para continuar."));
     clearAudioPreview();
     clearPreview(); showVariables({variables:[]});
-    status.textContent = "Importando contactos…";
+    status.textContent = t("Importando contactos…");
     fileInput.disabled = true; sheetSelect.disabled = true;
     try {
-      if (file.size > 8_000_000) throw new Error("El archivo supera 8 MB. Divide la lista en campañas más pequeñas.");
+      if (file.size > 8_000_000) throw new Error(t("El archivo supera 8 MB. Divide la lista en campañas más pequeñas."));
       const query = new URLSearchParams({filename:file.name, sheet});
       const response = await fetch(`/api/contacts/import?${query}`, {
-        method:"POST", headers:{"Content-Type":"application/octet-stream"}, body:file,
+        method:"POST", headers:{"Content-Type":"application/octet-stream","Accept-Language":getLanguage()}, body:file,
       });
       if (response.status === 401) expireSession();
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "No se pudo importar el archivo.");
+      if (!response.ok) throw new Error(translateText(data.detail || "No se pudo importar el archivo."));
       if (current !== revision) return;
       sheetSelect.replaceChildren();
       for (const name of data.sheets) {
@@ -83,7 +85,7 @@ export function installContactImport({api, expireSession, clearAudioPreview}) {
       contacts.dispatchEvent(new Event("input", {bubbles:true}));
       clearTimeout(timer);
       showVariables(data);
-      status.textContent = `${file.name}${data.sheet ? " · " + data.sheet : ""}: ${data.count} contactos y ${data.variables.length} columnas. Variables listas para insertar.`;
+      status.textContent = translateText(`${file.name}${data.sheet ? " · " + data.sheet : ""}: ${data.count} contactos y ${data.variables.length} datos personalizados listos para usar.`);
     } catch (error) {
       if (current === revision) status.textContent = error.message;
     } finally {

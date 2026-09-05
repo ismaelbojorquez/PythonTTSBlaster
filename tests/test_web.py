@@ -35,8 +35,11 @@ def test_create_preview_export_validation_and_origin(tmp_path):
         job = client.get(f"/api/campaigns/{cid}/jobs").json()[0]
         assert job["status"] == "queued"
         assert job["phone"] == "525550000101"
+        assert job["customer_trunk_id"] is None
+        assert job["customer_trunk_name"] is None
         assert client.get("/api/campaigns").json()[0]["agent_number"] == "525550009999"
         csv = client.get(f"/api/campaigns/{cid}/export")
+        assert "troncal,id_troncal" in csv.text
         assert "525550000101" in csv.text
         assert "+525550000101" not in csv.text
         assert (
@@ -50,7 +53,7 @@ def test_create_preview_export_validation_and_origin(tmp_path):
             == 403
         )
         assert client.get("/api/status", headers={"Host": "evil.example"}).status_code == 400
-        assert client.post("/api/settings", json={"concurrency": 6}).status_code == 422
+        assert client.post("/api/settings", json={"concurrency": 21}).status_code == 422
         assert client.post("/api/settings", json={"concurrency": 2}).json()["concurrency"] == 2
         assert client.get("/api/campaigns/unknown/jobs").status_code == 404
 

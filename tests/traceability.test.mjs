@@ -11,6 +11,9 @@ test("credit identifiers preserve their exact significant content", () => {
 
 test("telephone identifiers use the same harmless visual cleanup as dialing", () => {
   assert.deepEqual(traceIdentifier("phone", " +52 (55) 1234-5678 "), {
-    by: "phone", query: "525512345678",
+    by: "phone", query: "+525512345678", country: "MX",
+  });
+  assert.deepEqual(traceIdentifier("phone", " 55 7856-4016 ", "MX"), {
+    by: "phone", query: "5578564016", country: "MX",
   });
 });

@@ -119,6 +119,53 @@ def test_schedule_is_saved_with_campaign_and_dispatches_only_when_due(tmp_path):
         assert client.post(f"/api/campaigns/{cid}/stop", json={}).status_code == 200
 
 
+def test_saved_draft_can_be_scheduled_from_its_detail_with_audit(tmp_path):
+    app = make_app(tmp_path)
+    due = future()
+    with TestClient(app) as client:
+        cid = client.post("/api/campaigns", json=CAMPAIGN).json()["id"]
+        scheduled = client.post(
+            "/api/manage/schedules",
+            json={"campaign_id": cid, "local_at": due, "timezone": "UTC"},
+        )
+        assert scheduled.status_code == 200, scheduled.text
+        assert scheduled.json()["timezone"] == "UTC"
+        campaign = client.get("/api/campaigns").json()[0]
+        assert campaign["status"] == "draft"
+        assert campaign["display_status"] == "scheduled"
+        assert campaign["schedule"]["due_at"] == due
+        audit = client.portal.call(
+            lambda: app.state.store.db.execute(
+                "SELECT detail FROM audit WHERE action='campaign.scheduled_from_draft' "
+                "AND target=?",
+                (cid,),
+            ).fetchone()
+        )
+        assert audit is not None and due in audit["detail"]
+
+
+def test_only_unstarted_drafts_can_be_scheduled_and_automation_must_be_on(tmp_path):
+    disabled = make_app(tmp_path, enabled=False)
+    with TestClient(disabled) as client:
+        cid = client.post("/api/campaigns", json=CAMPAIGN).json()["id"]
+        result = client.post(
+            "/api/manage/schedules",
+            json={"campaign_id": cid, "local_at": future(), "timezone": "UTC"},
+        )
+        assert result.status_code == 422 and "Activa" in result.json()["detail"]
+        assert client.get("/api/campaigns").json()[0]["schedule"] is None
+
+    enabled = make_app(tmp_path / "started")
+    with TestClient(enabled) as client:
+        cid = client.post("/api/campaigns", json={**CAMPAIGN, "execution": "now"}).json()["id"]
+        result = client.post(
+            "/api/manage/schedules",
+            json={"campaign_id": cid, "local_at": future(), "timezone": "UTC"},
+        )
+        assert result.status_code == 422 and "borrador" in result.json()["detail"]
+        client.post(f"/api/campaigns/{cid}/stop", json={})
+
+
 @pytest.mark.parametrize(
     "fields",
     [

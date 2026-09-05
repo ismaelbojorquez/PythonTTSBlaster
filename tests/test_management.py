@@ -69,7 +69,9 @@ def test_auth_roles_revocation_audit_and_secrets(tmp_path):
         assert client.post("/api/auth/login", json=analyst).status_code == 200
         assert client.get("/api/campaigns").status_code == 200
         assert client.get("/api/manage/config").status_code == 403
+        assert client.get("/api/manage/voices").status_code == 403
         assert client.get("/api/manage/audit").status_code == 403
+        assert client.get("/api/amd-calibration").status_code == 403
         assert client.post("/api/campaigns", json=CAMPAIGN).status_code == 403
         assert client.get("/api/recordings/missing").status_code == 403
         assert (
@@ -92,7 +94,7 @@ def test_auth_roles_revocation_audit_and_secrets(tmp_path):
         assert client.post("/api/auth/login", json=operator).status_code == 200
         assert client.post("/api/campaigns", json=CAMPAIGN).status_code == 201
         assert client.post("/api/settings", json={"concurrency": 1}).status_code == 403
-        assert app.state.engine.settings.concurrency == 3
+        assert app.state.engine.settings.concurrency == 20
 
 
 def test_templates_schedules_reports_and_validation(tmp_path):
@@ -119,6 +121,7 @@ def test_templates_schedules_reports_and_validation(tmp_path):
             == 200
         )
         cid = client.post("/api/campaigns", json=CAMPAIGN).json()["id"]
+        app.state.engine.settings.automation.enabled = True
         due = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
         payload = {"campaign_id": cid, "local_at": due, "timezone": "America/Mexico_City"}
         scheduled = client.post("/api/manage/schedules", json=payload)
@@ -155,13 +158,19 @@ def test_configuration_persists_ports_capacity_and_masks_password(tmp_path):
         setup(client)
         original = client.get("/api/manage/config").json()
         assert (
-            client.post("/api/manage/config", json={**original, "concurrency": 10}).status_code
+            client.post("/api/manage/config", json={**original, "concurrency": 21}).status_code
             == 422
         )
         assert (
             client.post(
                 "/api/manage/config",
-                json={**original, "concurrency": 2, "trunk_channels": 6, "routing": "weighted"},
+                json={
+                    **original,
+                    "concurrency": 2,
+                    "trunk_channels": 6,
+                    "routing": "weighted",
+                    "amd": {**original["amd"], "calibration_capture_enabled": True},
+                },
             ).status_code
             == 200
         )
@@ -191,6 +200,7 @@ def test_configuration_persists_ports_capacity_and_masks_password(tmp_path):
             assert "NO-EXPORTAR" not in json.dumps(db.execute("SELECT * FROM trunks").fetchall())
         parsed = tomllib.loads((tmp_path / "config.toml").read_text())
         assert parsed["concurrency"] == 2 and parsed["trunk_channels"] == 6
+        assert parsed["amd"]["calibration_capture_enabled"] is True
         profile = next(t for t in parsed["trunks"] if t["id"] == "principal")
         assert profile["sip"]["password"] == "NO-EXPORTAR-123"
         assert profile["sip"]["local_port"] == 5080 and profile["sip"]["rtp_port"] == 18000

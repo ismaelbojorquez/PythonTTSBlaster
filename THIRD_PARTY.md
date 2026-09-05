@@ -24,11 +24,15 @@
   ficticio «Hola Ana. Te recordamos tu cita de mañana. Presiona uno para escuchar
   de nuevo el mensaje. Presiona dos para hablar con un agente.» No contiene audio
   capturado de personas ni de llamadas.
-- **Kokoro ONNX 1.0 INT8**: se utilizó únicamente para comparar latencia. La
+- **Kokoro ONNX 1.0**: motor de voz opcional instalado en un entorno aislado. La
   envoltura `kokoro-onnx` declara MIT y el modelo Kokoro declara Apache-2.0:
-  https://github.com/thewh1teagle/kokoro-onnx. No es una dependencia del motor
-  instalado. `examples/tts-kokoro-dora-int8.wav` es audio sintético de prueba.
-- **Comparación TTS**: los tres archivos `examples/tts-*.wav` usan el mismo texto
+  https://github.com/thewh1teagle/kokoro-onnx. `examples/tts-kokoro-dora-int8.wav`
+  es audio sintético de prueba.
+- **Phonemizer 3.4 y eSpeak NG**: Kokoro los utiliza para convertir el español a
+  pronunciación. Ambos declaran GPLv3 o posterior, que permite uso comercial y
+  exige conservar la licencia y facilitar el código fuente correspondiente cuando
+  se redistribuyen sus paquetes o binarios. Se instalan dentro de `.venv-kokoro`.
+- **Comparación TTS**: los archivos `examples/tts-*.wav` usan el mismo texto
   ficticio. No contienen grabaciones, clonación de voz ni datos de una llamada.
 - **Interfaz**: sin fuentes remotas, CDN, fotos ni paquetes de iconos. El símbolo
   geométrico y los diagramas SVG están creados dentro del proyecto.

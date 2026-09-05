@@ -1,19 +1,37 @@
 import { recordingMarkup, stopRecordings } from "./recording-player.js";
+import { getLanguage, locale, t, translateHTML, translateText } from "./i18n.js";
 
 const $ = s => document.querySelector(s);
-const number = new Intl.NumberFormat("es-MX");
+const number = new Intl.NumberFormat(locale());
+const decimal = new Intl.NumberFormat(locale(), {minimumFractionDigits:1, maximumFractionDigits:1});
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 const n = value => value == null ? "—" : number.format(value);
-const pct = value => value == null ? "Sin base de cálculo" : `${(value * 100).toFixed(1)} %`;
+const pct = value => value == null ? t("Sin base de cálculo") : `${decimal.format(value * 100)} %`;
 const pageSize = () => matchMedia("(max-width:680px)").matches ? 25 : 50;
-const seconds = value => value == null ? "—" : value < 60 ? `${value.toFixed(1)} s` : `${Math.floor(value / 60)} min ${Math.round(value % 60)} s`;
-const actors = {customer:"Cliente", agent:"Agente", system:"Sistema", operator:"Operador local", trunk:"Troncal", unknown:"Desconocido"};
-const amd = {human:"Humano probable", machine:"Buzón probable", unknown:"Incierto", pending:"Sin resultado", disabled:"Desactivado", unmeasured:"Sin medición histórica"};
-const colors = ["#176278", "#39987d", "#ca9134", "#8499ab", "#b86666", "#756996", "#9aab9a", "#b48962", "#446477"];
+const seconds = value => value == null ? "—" : value < 60 ? `${decimal.format(value)} s` : `${Math.floor(value / 60)} min ${Math.round(value % 60)} s`;
+function trunkIdLabel(id, storedName = "") {
+  if (!id) return t("Sin asignar");
+  const name = storedName || ctx.state.status?.trunks?.find(trunk => trunk.id === id)?.name;
+  return ctx.commercialText(name || id);
+}
+function trunkLabel(row, role = "customer") {
+  const id = row?.[`${role}_trunk_id`];
+  if (!id) return t("Sin asignar");
+  const name = row?.[`${role}_trunk_name`];
+  return ctx.commercialText(name || trunkIdLabel(id));
+}
+const localizedMap = source => Object.fromEntries(Object.entries(source).map(([key,value])=>[key,t(value)]));
+const actors = localizedMap({customer:"Cliente", agent:"Agente", system:"Plataforma", operator:"Operador", trunk:"Proveedor", unknown:"No identificado"});
+const amd = localizedMap({human:"Persona probable", machine:"Buzón probable", unknown:"Respuesta no identificada", pending:"Pendiente", disabled:"Sin evaluación", unmeasured:"Sin información anterior"});
+const responseReasons = localizedMap({short_greeting:"Saludo breve seguido de una pausa",long_greeting:"Saludo prolongado",many_words:"Saludo con varias frases",beep:"Tono de buzón",initial_silence:"No se escuchó un saludo",analysis_timeout:"No fue posible identificar la respuesta a tiempo",no_audio:"No se recibió voz",audio_overflow:"La recepción de voz se interrumpió",invalid_audio:"No fue posible reconocer el audio"});
+const lightColors = ["#171714", "#73921b", "#d28c28", "#8e9188", "#ba6257", "#62547f", "#94a88b", "#a87951", "#4d5a48"];
+const darkColors = ["#edf0e7", "#a7c93a", "#efb55a", "#aeb1a6", "#e27e73", "#a997cb", "#abc3a3", "#d1a174", "#93a68c"];
+const darkTheme = () => document.documentElement.dataset.theme === "dark";
+const colors = () => darkTheme() ? darkColors : lightColors;
 let ctx, initialized = false, lastFetch = 0, request = 0, offset = 0, detailId = null, summary = null, downloaded = false;
 let detailOrigin = "calls", detailOriginId = null;
 let query = new URLSearchParams(), charts = new Map();
-const labels = {dashboard:"El pulso de tus llamadas", calls:"Todas las llamadas", reports:"Reportes y exportaciones"};
+const labels = localizedMap({dashboard:"El pulso de tus llamadas", calls:"Todas las llamadas", reports:"Reportes y exportaciones"});
 
 export function installAnalytics(context) {
   ctx = context;
@@ -27,6 +45,11 @@ export function installAnalytics(context) {
   });
   $("#call-search-form").addEventListener("submit", event => {
     event.preventDefault(); offset = 0; fetchCalls().catch(error => ctx.notice(error.message));
+  });
+  window.addEventListener("blaster:theme-change", () => {
+    for (const item of charts.values()) item.instance.destroy();
+    charts.clear();
+    if (summary) renderSummary(summary);
   });
 }
 
@@ -50,14 +73,14 @@ function currentFilters() {
   return result;
 }
 async function applyFilters() {
-  if ($("#filter-from").value && $("#filter-to").value && $("#filter-from").value > $("#filter-to").value) throw new Error("La fecha inicial debe ser anterior o igual a la final.");
+  if ($("#filter-from").value && $("#filter-to").value && $("#filter-from").value > $("#filter-to").value) throw new Error(t("La fecha inicial debe ser anterior o igual a la final."));
   stopRecordings();
   query = currentFilters(); offset = 0; detailId = null; lastFetch = 0;
   ctx.notice(); await analyticsRefresh(true);
 }
 function time(value, full = false) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("es-MX", {timeZone:ctx.state.status?.reporting_timezone || "America/Mexico_City", ...(full ? {day:"2-digit", month:"short", year:"numeric"} : {}),hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false}).format(new Date(value));
+  return new Intl.DateTimeFormat(locale(), {timeZone:ctx.state.status?.reporting_timezone || "America/Mexico_City", ...(full ? {day:"2-digit", month:"short", year:"numeric"} : {}),hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false}).format(new Date(value));
 }
 
 export function analyticsView(name) {
@@ -65,12 +88,12 @@ export function analyticsView(name) {
   for (const id of ["analytics-heading", "analytics-filters", "analytics-context"]) $(`#${id}`).hidden = !enabled;
   $(".capacity-strip").hidden = !["campaign", "editor", "empty"].includes(name);
   $("#analytics-title").textContent = labels[name] || "";
-  $("#analytics-subtitle").textContent = name === "calls" ? "Cada respuesta, transferencia y finalización, en un solo registro." : name === "reports" ? "Convierte el recorrido de tus llamadas en información útil." : "De la primera marcación a la conversación con tu agente.";
+  $("#analytics-subtitle").textContent = t(name === "calls" ? "Cada respuesta, transferencia y finalización, en un solo registro." : name === "reports" ? "Convierte el recorrido de tus llamadas en información útil." : "De la primera marcación a la conversación con tu agente.");
   const nav = ["campaign", "editor", "empty"].includes(name) ? "campaigns" : name;
   document.querySelectorAll(".primary-nav button").forEach(button => {
     if (button.dataset.action === `nav-${nav}`) button.setAttribute("aria-current","page"); else button.removeAttribute("aria-current");
   });
-  $(".topbar-title").textContent = {dashboard:"Dashboard",campaigns:"Campañas",calls:"Llamadas / CDR",traceability:"Trazabilidad",reports:"Reportes",operations:"Operación"}[nav];
+  $(".topbar-title").textContent = t({dashboard:"Resumen",campaigns:"Campañas",calls:"Historial de llamadas",traceability:"Historial por cliente",reports:"Reportes",operations:"Operación"}[nav]);
   document.title = `Blaster · ${$(".topbar-title").textContent}`;
   lastFetch = 0;
 }
@@ -81,10 +104,10 @@ export async function analyticsRefresh(force = false) {
     initialized = true; $("#filter-mode").value = ctx.state.status.mode;
     dates("30"); query = currentFilters();
   }
-  $("#live-count").textContent = `${ctx.state.status.active_sessions} en curso`;
+  $("#live-count").textContent = translateText(`${ctx.state.status.active_sessions} en curso`);
   const selector = $("#filter-campaign"), old = selector.value;
-  const options = '<option value="">Todas las campañas</option>' + ctx.state.campaigns.map(c => `<option value="${esc(c.id)}">${esc(c.name)}${c.lineage?.execution_number > 1 ? ` · Ejecución ${c.lineage.execution_number}` : ""}</option>`).join("");
-  if (selector._options !== options) { selector.innerHTML = options; selector._options = options; selector.value = old; }
+  const options = `<option value="">${t("Todas las campañas")}</option>` + ctx.state.campaigns.map(c => `<option value="${esc(c.id)}">${esc(c.name)}${c.lineage?.execution_number > 1 ? ` · ${translateText(`Envío ${c.lineage.execution_number}`)}` : ""}</option>`).join("");
+  if (selector._options !== options) { selector.innerHTML = translateHTML(options); selector._options = options; selector.value = old; }
   if (ctx.state.view === "campaigns") renderCampaignOverview();
   if (!["dashboard","reports","calls"].includes(ctx.state.view)) return;
   if (!force && Date.now() - lastFetch < (ctx.state.view === "calls" ? 5000 : 15000)) return;
@@ -100,62 +123,69 @@ export async function analyticsRefresh(force = false) {
 }
 
 function contextLine(total) {
-  const mode = {sip:"SIP real",simulation:"Simulación",all:"SIP y simulación"}[query.get("mode")];
-  $("#filter-description").textContent = `${n(total)} sesiones · ${mode} · ${ctx.state.status.reporting_timezone}`;
-  $("#analytics-updated").textContent = `Actualizado ${time(new Date().toISOString())}`;
+  const mode = t({sip:"En vivo",simulation:"Prueba",all:"Todas las operaciones"}[query.get("mode")]);
+  $("#filter-description").textContent = `${translateText(`${n(total)} llamadas`)} · ${mode} · ${ctx.state.status.reporting_timezone}`;
+  $("#analytics-updated").textContent = translateText(`Actualizado ${time(new Date().toISOString())}`);
 }
 function chart(id, type, data, options = {}) {
-  const signature = JSON.stringify({data, options});
+  const signature = JSON.stringify({theme:darkTheme() ? "dark" : "light", data, options});
   const existing = charts.get(id);
   if (existing?.signature === signature) { existing.instance.resize(); return; }
   existing?.instance.destroy();
   const instance = new window.Chart($("#" + id), {type, data, options: {
     responsive:true, maintainAspectRatio:false, animation:false,
     interaction:{mode:"index",intersect:false},
-    plugins:{legend:{position:"bottom", align:"start", labels:{usePointStyle:true,pointStyle:"circle",boxWidth:7,boxHeight:7,padding:20,color:"#536b76",font:{size:11}}},tooltip:{backgroundColor:"#203841",padding:12,cornerRadius:6}},
-    scales:type === "doughnut" ? {} : {x:{grid:{display:false},border:{display:false},ticks:{maxTicksLimit:7,maxRotation:0,color:"#536b76",font:{size:11}}},y:{beginAtZero:true,border:{display:false},grid:{color:"#eaf0f3"},ticks:{precision:0,maxTicksLimit:5,color:"#536b76",font:{size:11}}}},
+    plugins:{legend:{position:"bottom", align:"start", labels:{usePointStyle:true,pointStyle:"rectRounded",boxWidth:7,boxHeight:7,padding:20,color:darkTheme()?"#aeb0a7":"#66685f",font:{size:11}}},tooltip:{backgroundColor:"#171714",padding:12,cornerRadius:7}},
+    scales:type === "doughnut" ? {} : {x:{grid:{display:false},border:{display:false},ticks:{maxTicksLimit:7,maxRotation:0,color:darkTheme()?"#aeb0a7":"#66685f",font:{size:11}}},y:{beginAtZero:true,border:{display:false},grid:{color:darkTheme()?"#353731":"#e5e1d6"},ticks:{precision:0,maxTicksLimit:5,color:darkTheme()?"#aeb0a7":"#66685f",font:{size:11}}}},
     ...options
   }});
   charts.set(id, {signature, instance});
 }
 function bars(id, values, names, maximum = null) {
   const entries = Object.entries(values), max = maximum || Math.max(1, ...Object.values(values));
-  ctx.setHTML($(id), entries.length ? entries.map(([key,value],i) => `<div class="bar-row series-${i % colors.length}"><div><span>${esc(names[key] || key)}</span><strong>${n(value)}</strong></div><meter min="0" max="${max}" value="${value}" aria-label="${esc(names[key] || key)}">${value} de ${max}</meter></div>`).join("") : '<p class="no-measurements">Sin mediciones en este período.</p>');
+  ctx.setHTML($(id), entries.length ? entries.map(([key,value],i) => {
+    const label = t(names[key] || key);
+    return `<div class="bar-row series-${i % lightColors.length}"><div><span>${esc(label)}</span><strong>${n(value)}</strong></div><meter min="0" max="${max}" value="${value}" aria-label="${esc(label)}">${value} ${t("de")} ${max}</meter></div>`;
+  }).join("") : '<p class="no-measurements">Sin mediciones en este período.</p>');
 }
 function renderSummary(data) {
   const c = data.counts; contextLine(c.total);
   $("#analytics-empty").hidden = c.total > 0;
   $("#coverage-note").hidden = c.legacy === 0;
-  $("#coverage-note").textContent = `${n(c.legacy)} registros históricos conservan su resultado original. Las tasas y los tiempos utilizan únicamente evidencia capturada; los datos faltantes aparecen como «—».`;
+  $("#coverage-note").textContent = translateText(`${n(c.legacy)} registros anteriores conservan su resultado original. Los porcentajes y tiempos se calculan con la información disponible; los datos faltantes aparecen como «—».`);
   $("#metric-total").textContent = n(c.total);
-  $("#metric-total-note").textContent = `${n(c.attempted)} INVITE observados · ${n(c.active)} en curso`;
+  $("#metric-total-note").textContent = translateText(`${n(c.attempted)} intentos realizados · ${n(c.active)} en curso`);
   $("#metric-answer").textContent = n(c.answered);
-  $("#metric-answer-note").textContent = `${pct(data.answer_rate)} de respuesta · incluye buzones`;
+  $("#metric-answer-note").textContent = data.answer_rate == null
+    ? t("Sin tasa de respuesta · incluye buzones")
+    : translateText(`${pct(data.answer_rate)} de respuesta · incluye buzones`);
   $("#metric-bridge").textContent = n(c.bridged);
-  $("#metric-bridge-note").textContent = `${n(c.transfer_requested)} solicitudes · ${pct(data.transfer_rate)}`;
+  $("#metric-bridge-note").textContent = data.transfer_rate == null
+    ? translateText(`${n(c.transfer_requested)} solicitudes · Sin tasa de transferencia`)
+    : translateText(`${n(c.transfer_requested)} solicitudes · ${pct(data.transfer_rate)}`);
   const duration = data.durations.customer_connected_seconds;
   $("#metric-duration").textContent = seconds(duration?.average);
-  $("#metric-duration-note").textContent = `${n(duration?.samples || 0)} tramos con fin observado`;
+  $("#metric-duration-note").textContent = translateText(`${n(duration?.samples || 0)} llamadas finalizadas`);
   $("#outcome-total").textContent = n(c.total);
   const outcomes = Object.entries(data.outcomes).sort((a,b) => b[1] - a[1]);
   const outcomeLabels = outcomes.map(([key]) => ctx.labels[key] || key);
-  chart("outcome-chart", "doughnut", {labels:outcomeLabels,datasets:[{data:outcomes.map(([,v]) => v),backgroundColor:colors,borderWidth:3,borderColor:"#fff",hoverOffset:4}]}, {cutout:"78%",plugins:{legend:{display:false},tooltip:{backgroundColor:"#203841",padding:12}}});
-  ctx.setHTML($("#outcome-legend"), outcomes.map(([key,value],i) => `<button data-action="outcome-filter" data-status="${esc(key)}" class="legend-row series-${i % colors.length}"><span class="legend-dot" aria-hidden="true"></span><span>${esc(ctx.labels[key] || key)}</span><strong>${n(value)}</strong><small>${c.total ? Math.round(value / c.total * 100) : 0}%</small></button>`).join("") || '<p class="no-measurements">Los resultados aparecerán aquí.</p>');
+  chart("outcome-chart", "doughnut", {labels:outcomeLabels,datasets:[{data:outcomes.map(([,v]) => v),backgroundColor:colors(),borderWidth:3,borderColor:darkTheme()?"#1b1c19":"#ffffff",hoverOffset:4}]}, {cutout:"78%",plugins:{legend:{display:false},tooltip:{backgroundColor:"#171714",padding:12}}});
+  ctx.setHTML($("#outcome-legend"), outcomes.map(([key,value],i) => `<button data-action="outcome-filter" data-status="${esc(key)}" class="legend-row series-${i % lightColors.length}"><span class="legend-dot" aria-hidden="true"></span><span>${esc(ctx.labels[key] || key)}</span><strong>${n(value)}</strong><small>${c.total ? Math.round(value / c.total * 100) : 0}%</small></button>`).join("") || '<p class="no-measurements">Los resultados aparecerán aquí.</p>');
   const daily = fillDays(data.daily);
   chart("trend-chart", "line", {labels:daily.map(d => `${d.date.slice(8,10)}/${d.date.slice(5,7)}`),datasets:[
-    {label:"Sesiones",data:daily.map(d=>d.total),borderColor:colors[0],backgroundColor:"#17627812",fill:true},
-    {label:"Respuestas",data:daily.map(d=>d.answered),borderColor:colors[1]},
-    {label:"Con agente",data:daily.map(d=>d.bridged),borderColor:colors[2]}
+    {label:t("Llamadas"),data:daily.map(d=>d.total),borderColor:colors()[0],backgroundColor:"#d9ff4324",fill:true},
+    {label:t("Respuestas"),data:daily.map(d=>d.answered),borderColor:colors()[1]},
+    {label:t("Con agente"),data:daily.map(d=>d.bridged),borderColor:colors()[2]}
   ].map(d => ({...d,borderWidth:2,pointRadius:daily.length < 3 ? 4 : 0,pointHoverRadius:5,tension:0.18}))});
-  ctx.setHTML($("#trend-data"), table(["Fecha","Sesiones","Respuestas","Con agente"], daily.map(d=>[d.date,n(d.total),n(d.answered),n(d.bridged)])));
-  bars("#connection-funnel", {attempted:c.attempted, answered:c.answered, transfer:c.transfer_requested, bridged:c.bridged}, {attempted:"Marcaciones observadas",answered:"Cliente contesta",transfer:"Solicita agente · opción 2",bridged:"Conversación conectada"}, c.attempted);
+  ctx.setHTML($("#trend-data"), table(["Fecha","Llamadas","Respuestas","Con agente"], daily.map(d=>[d.date,n(d.total),n(d.answered),n(d.bridged)])));
+  bars("#connection-funnel", {attempted:c.attempted, answered:c.answered, transfer:c.transfer_requested, bridged:c.bridged}, localizedMap({attempted:"Marcaciones observadas",answered:"Cliente contesta",transfer:"Solicita agente · opción 2",bridged:"Conversación conectada"}), c.attempted);
   bars("#hangup-bars", data.hangup_actors, actors);
   bars("#amd-bars", data.amd, amd);
   bars("#duration-bars", data.duration_buckets, {});
-  const timing = [["customer_pdd_seconds","Hasta timbrado",false],["customer_setup_seconds","Hasta respuesta",false],["tts_ms","Generación de voz",true],["agent_setup_seconds","Respuesta del agente",false],["bridge_seconds","Conversación en puente",false]];
-  ctx.setHTML($("#timing-metrics"), timing.map(([key,label,ms])=>`<div><span>${label}</span><strong>${seconds(data.durations[key]?.average == null ? null : data.durations[key].average / (ms ? 1000 : 1))}</strong><small>${n(data.durations[key]?.samples || 0)} mediciones</small></div>`).join(""));
-  ctx.setHTML($("#analytics-campaigns"), data.campaigns.length ? table(["Campaña","Sesiones","Respuestas","Con agente"], data.campaigns.map(c=>[`<button class="text-link table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button>`,n(c.total),n(c.answered),n(c.bridged)]),true) : '<p class="no-measurements">Las campañas con llamadas iniciadas aparecerán aquí.</p>');
-  $("#report-scope").textContent = `${n(c.total)} sesiones en este corte. Máximo por archivo: ${n(ctx.state.status.report_max_rows)}. El Excel incluye CDRs, tramos y eventos.`;
+  const timing = [["customer_pdd_seconds",t("Inicio del timbrado"),false],["customer_setup_seconds",t("Respuesta del cliente"),false],["tts_ms",t("Preparación del mensaje"),true],["agent_setup_seconds",t("Respuesta del agente"),false],["bridge_seconds",t("Conversación con agente"),false]];
+  ctx.setHTML($("#timing-metrics"), timing.map(([key,label,ms])=>`<div><span>${label}</span><strong>${seconds(data.durations[key]?.average == null ? null : data.durations[key].average / (ms ? 1000 : 1))}</strong><small>${n(data.durations[key]?.samples || 0)} ${t("mediciones")}</small></div>`).join(""));
+  ctx.setHTML($("#analytics-campaigns"), data.campaigns.length ? table(["Campaña","Llamadas","Respuestas","Con agente"], data.campaigns.map(c=>[`<button class="text-link table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button>`,n(c.total),n(c.answered),n(c.bridged)]),true) : '<p class="no-measurements">Las campañas con llamadas iniciadas aparecerán aquí.</p>');
+  $("#report-scope").textContent = translateText(`${n(c.total)} llamadas en este período. Cada archivo puede incluir hasta ${n(ctx.state.status.report_max_rows)} registros y reúne resultados, tiempos y actividad.`);
 }
 function fillDays(items) {
   let from = query.get("date_from") || items[0]?.date;
@@ -172,7 +202,7 @@ function fillDays(items) {
   return result;
 }
 function table(headers, rows, html = false) {
-  return `<table><thead><tr>${headers.map(h=>`<th scope="col">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(v=>`<td>${html ? v : esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  return `<table><thead><tr>${headers.map(h=>`<th scope="col">${esc(t(h))}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(v=>`<td>${html ? v : esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 
 function renderCampaignOverview() {
@@ -183,7 +213,7 @@ function renderCampaignOverview() {
   }
   ctx.setHTML($("#campaign-overview"), `<div class="campaign-list-table">${campaigns.map(c => {
     const done = Object.entries(c.counts).filter(([key]) => ctx.terminal.has(key)).reduce((sum,[,value])=>sum+value,0);
-    return `<article class="campaign-summary-row"><div><button class="table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button><p>${c.mode === "sip" ? "SIP real" : "Simulación"} · Ejecución ${c.lineage?.execution_number || 1} · ${n(c.agent_numbers?.length || 1)} teléfonos de transferencia</p></div><div>${ctx.badge(c.display_status || c.status)}</div><div class="campaign-progress"><label>${n(done)} de ${n(c.total)} finalizadas</label><meter min="0" max="${c.total || 1}" value="${done}">${n(done)} de ${n(c.total)}</meter></div><div class="campaign-pending"><strong>${n(c.counts.queued || 0)}</strong><span>pendientes</span></div><button class="secondary" data-action="select-campaign" data-id="${esc(c.id)}">Abrir campaña</button></article>`;
+    return `<article class="campaign-summary-row"><div><button class="table-link" data-action="select-campaign" data-id="${esc(c.id)}">${esc(c.name)}</button><p>${t(c.mode === "sip" ? "En vivo" : "Prueba")} · ${translateText(`Envío ${c.lineage?.execution_number || 1}`)} · ${n(c.agent_numbers?.length || 1)} ${t("teléfonos de transferencia")}</p></div><div>${ctx.badge(c.display_status || c.status)}</div><div class="campaign-progress"><label>${n(done)} ${t("de")} ${n(c.total)} ${t("finalizadas")}</label><meter min="0" max="${c.total || 1}" value="${done}">${n(done)} ${t("de")} ${n(c.total)}</meter></div><div class="campaign-pending"><strong>${n(c.counts.queued || 0)}</strong><span>${t("pendientes")}</span></div><button class="secondary" data-action="select-campaign" data-id="${esc(c.id)}">${t("Abrir campaña")}</button></article>`;
   }).join("")}</div>`);
 }
 function callQuery() {
@@ -201,39 +231,38 @@ async function fetchCalls() {
   if (version !== request || ctx.state.view !== "calls") return;
   contextLine(result.total);
   $("#cdr-detail").hidden = true; $("#calls-explorer").hidden = false;
-  ctx.setHTML($("#cdr-rows"), result.items.map(row => `<tr><td><time datetime="${esc(row.started_at)}">${esc(time(row.started_at,true))}</time><span class="cell-meta">${esc(row.campaign_name)} · Intento ${n(row.attempt_number || 1)}</span></td><td><button class="contact-button" data-action="open-cdr" data-id="${esc(row.id)}">${esc(row.contact_name || row.phone)}${row.contact_name ? `<span>${esc(row.phone)}</span>` : ""}<span>Credito ${esc(row.credit_id || "Sin crédito histórico")}</span><span class="detail-affordance">Ver detalle de llamada</span></button>${row.coverage === "legacy" ? '<span class="cell-meta">Histórico</span>' : ""}</td><td>${ctx.badge(row.status)}</td><td><span class="amd-text ${esc(row.amd_verdict)}">${esc(row.amd_label)}</span></td><td class="numeric">${seconds(row.customer_connected_seconds)}</td><td class="numeric">${seconds(row.bridge_seconds)}</td><td>${esc(actors[row.end_actor] || "Desconocido")}</td></tr>`).join("") || '<tr><td colspan="7" class="table-empty">No hay llamadas con estos filtros. Prueba otro período o resultado.</td></tr>');
-  $("#cdr-page-info").textContent = result.total ? `${n(offset + 1)}–${n(Math.min(offset + limit,result.total))} de ${n(result.total)}` : "0 llamadas";
+  ctx.setHTML($("#cdr-rows"), result.items.map(row => `<tr><td><time datetime="${esc(row.started_at)}">${esc(time(row.started_at,true))}</time><span class="cell-meta">${esc(row.campaign_name)} · ${t("Intento")} ${n(row.attempt_number || 1)}</span></td><td><button class="contact-button" data-action="open-cdr" data-id="${esc(row.id)}">${esc(row.contact_name || row.phone)}${row.contact_name ? `<span>${esc(row.phone)}</span>` : ""}<span>${t("Crédito")} ${esc(row.credit_id || t("Sin crédito histórico"))}</span><span class="detail-affordance">${t("Ver detalle de llamada")}</span></button>${row.coverage === "legacy" ? `<span class="cell-meta">${t("Histórico")}</span>` : ""}</td><td><span class="trunk-cell">${esc(trunkLabel(row))}</span></td><td>${ctx.badge(row.status)}</td><td><span class="amd-text ${esc(row.amd_verdict)}">${esc(translateText(row.amd_label))}</span></td><td class="numeric">${seconds(row.customer_connected_seconds)}</td><td class="numeric">${seconds(row.bridge_seconds)}</td><td>${esc(actors[row.end_actor] || t("No identificado"))}</td></tr>`).join("") || `<tr><td colspan="8" class="table-empty">${t("No hay llamadas con estos filtros. Prueba otro período o resultado.")}</td></tr>`);
+  $("#cdr-page-info").textContent = result.total ? `${n(offset + 1)}–${n(Math.min(offset + limit,result.total))} ${t("de")} ${n(result.total)}` : translateText("0 llamadas");
   $("#cdr-previous").disabled = offset === 0;
   $("#cdr-next").disabled = offset + limit >= result.total;
 }
 
-const eventNames = {agent_pool_waiting:"Espera de teléfono libre",agent_pool_timeout:"Espera de pool agotada",agent_selected:"Teléfono de transferencia seleccionado",route_selected:"Ruta seleccionada",route_failover:"Cambio a respaldo",recording_started:"Grabación iniciada",recording_ready:"Audio comprimido disponible",created:"Tramo creado",invite_sent:"INVITE enviado",response:"Respuesta de la troncal",ringing:"Timbrando",answered:"Llamada contestada",media_ready:"Audio activo",identity:"Identificador SIP asignado",termination:"Inicio de finalización",closed:"Tramo desconectado",dtmf:"Opción de teclado recibida",amd:"Análisis del saludo",tts_ready:"Voz personalizada lista",message_started:"Reproducción iniciada",message_completed:"Reproducción completada",repeat_requested:"Cliente solicita repetición",transfer_requested:"Cliente solicita agente",bridged:"Cliente y agente enlazados",session_end:"Finalización de sesión",finalized:"CDR cerrado",redirect_reported:"Redirección SIP informada",refer_rejected:"Solicitud REFER rechazada"};
-const reasons = {bye:"Cuelgue remoto",cancel:"Cancelación remota",sip_response:"Respuesta SIP final",cleanup:"Limpieza del tramo",session_cleanup:"Final de sesión",campaign_stopped:"Campaña detenida",shutdown:"Aplicación cerrada",process_interrupted:"Proceso interrumpido",disconnected:"Desconexión sin iniciador identificado",machine:"Buzón probable",amd_unknown:"AMD incierto",no_answer:"Tiempo de timbrado agotado",no_input:"No seleccionó una opción",completed:"Flujo finalizado",failed:"Error en el flujo",temporary_error:"Fallo temporal de la troncal",agent_timeout:"Tiempo de espera del agente agotado"};
+const eventNames = localizedMap({agent_pool_waiting:"Esperando un teléfono disponible",agent_pool_timeout:"No hubo un teléfono disponible",agent_selected:"Teléfono de transferencia seleccionado",route_selected:"Proveedor seleccionado",route_failover:"Cambio al proveedor de respaldo",recording_started:"Grabación iniciada",recording_ready:"Grabación disponible",created:"Llamada preparada",invite_sent:"Llamada enviada",response:"Respuesta del proveedor",ringing:"Timbrando",answered:"Llamada contestada",media_ready:"Audio disponible",identity:"Referencia asignada",termination:"Finalización iniciada",closed:"Llamada desconectada",dtmf:"Opción seleccionada",amd:"Respuesta identificada",tts_ready:"Mensaje personalizado listo",message_started:"Mensaje iniciado",message_completed:"Mensaje finalizado",repeat_requested:"Cliente solicita repetición",transfer_requested:"Cliente solicita agente",bridged:"Cliente y agente conectados",session_end:"Llamada finalizada",finalized:"Historial guardado",redirect_reported:"Llamada redirigida",refer_rejected:"No fue posible redirigir la llamada"});
+const reasons = localizedMap({bye:"La otra persona finalizó",cancel:"Llamada cancelada",sip_response:"Respuesta final del proveedor",cleanup:"Cierre de la llamada",session_cleanup:"Fin de la llamada",campaign_stopped:"Campaña detenida",shutdown:"Blaster fue cerrado",process_interrupted:"Operación interrumpida",disconnected:"No se pudo identificar quién finalizó",machine:"Buzón probable",amd_unknown:"Respuesta no identificada",no_answer:"No hubo respuesta",no_input:"No seleccionó una opción",completed:"Recorrido completado",failed:"La llamada no se completó",temporary_error:"Proveedor no disponible",agent_timeout:"El agente no respondió a tiempo"});
 async function openDetail(id, focus = true) {
   detailId = id;
   const result = await ctx.api(`/api/calls/${encodeURIComponent(id)}`);
   if (detailId !== id || ctx.state.view !== "calls") return;
   $("#calls-explorer").hidden = true; $("#cdr-detail").hidden = false;
-  const legRows = result.legs.map(leg=>[leg.role.startsWith("customer") ? (leg.role === "customer" ? "Cliente" : "Cliente · intento previo") : "Agente",leg.number,leg.trunk_id || "—",time(leg.invite_at),time(leg.ringing_at),time(leg.answered_at),time(leg.ended_at),seconds(leg.connected_seconds),actors[leg.end_actor] || "Desconocido",leg.sip_code || "—"]);
+  const legRows = result.legs.map(leg=>[t(leg.role.startsWith("customer") ? (leg.role === "customer" ? "Cliente" : "Cliente · intento previo") : "Agente"),leg.number,trunkIdLabel(leg.trunk_id,leg.trunk_name),time(leg.invite_at),time(leg.ringing_at),time(leg.answered_at),time(leg.ended_at),seconds(leg.connected_seconds),actors[leg.end_actor] || t("No identificado")]);
   const events = result.events.filter(event=>event.kind !== "identity");
-  const roleById = Object.fromEntries(result.legs.map(leg=>[leg.id,leg.role.startsWith("customer") ? (leg.role === "customer" ? "Cliente" : "Cliente · intento previo") : "Agente"]));
+  const roleById = Object.fromEntries(result.legs.map(leg=>[leg.id,t(leg.role.startsWith("customer") ? (leg.role === "customer" ? "Cliente" : "Cliente · intento previo") : "Agente")]));
   const history = events.map(event=> {
     const details = [];
-    if (event.data.trunk_id) details.push(`Troncal ${event.data.trunk_id}`);
-    if (event.data.next) details.push(`${event.data.previous} → ${event.data.next}`);
-    if (event.data.code) details.push(`SIP ${event.data.code}`);
-    if (event.data.digit) details.push(`Tecla ${event.data.digit}`);
+    if (event.data.trunk_id) details.push(`${t("Proveedor")} ${trunkIdLabel(event.data.trunk_id)}`);
+    if (event.data.next) details.push(`${trunkIdLabel(event.data.previous)} → ${trunkIdLabel(event.data.next)}`);
+    if (event.data.digit) details.push(`${t("Tecla")} ${event.data.digit}`);
     if (event.data.verdict) details.push(amd[event.data.verdict]);
-    if (event.data.actor) details.push(actors[event.data.actor] || event.data.actor);
-    if (event.data.reason) details.push(reasons[event.data.reason] || event.data.reason);
-    if (event.data.evidence) details.push(event.data.evidence);
-    return `<li><time datetime="${esc(event.created_at)}">${esc(time(event.created_at))}</time><div><strong>${esc(eventNames[event.kind] || event.kind)}</strong><p>${esc(details.join(" · "))}</p></div><span class="event-role">${esc(roleById[event.leg_id] || "Sesión")}</span></li>`;
+    if (event.data.actor) details.push(actors[event.data.actor] || t("Responsable no identificado"));
+    if (event.data.reason) details.push(reasons[event.data.reason] || responseReasons[event.data.reason] || t("Motivo registrado"));
+    if (event.data.evidence) details.push(ctx.commercialText(event.data.evidence));
+    return `<li><time datetime="${esc(event.created_at)}">${esc(time(event.created_at))}</time><div><strong>${esc(eventNames[event.kind] || t("Actividad actualizada"))}</strong><p>${esc(details.join(" · "))}</p></div><span class="event-role">${esc(roleById[event.leg_id] || t("Llamada"))}</span></li>`;
   }).join("");
   const active = ctx.state.status.sessions.some(s=>s.id === id);
   const canChoose = ["playing","menu"].includes(result.status);
   const keypad = ctx.state.status.mode === "simulation" && active ? `<section class="detail-simulation"><h2>Probar esta llamada</h2><div class="report-actions"><button class="secondary" data-action="cdr-digit" data-value="1" ${canChoose ? "" : "disabled"}>1 · Repetir</button><button class="secondary" data-action="cdr-digit" data-value="2" ${canChoose ? "" : "disabled"}>2 · Agente</button><button class="danger-quiet" data-action="cdr-digit" data-value="hangup">Cliente cuelga</button>${result.agent_id ? '<button class="danger-quiet" data-action="cdr-digit" data-value="agent_hangup">Agente cuelga</button>' : ""}</div></section>` : "";
-  const backLabel = detailOrigin === "traceability" ? "Volver a trazabilidad" : "Volver a las llamadas";
-  ctx.setHTML($("#cdr-detail"), `<button class="text-link back-link" data-action="back-calls">${backLabel}</button><div class="section-heading"><div><h2 class="detail-title">${esc(result.contact_name || result.phone)}</h2><p>${esc(result.phone)} · Credito ${esc(result.credit_id || "Sin crédito histórico")} · ${esc(result.campaign_name)} · Intento ${n(result.attempt_number || 1)}</p></div>${ctx.badge(result.status)}</div>${result.coverage === "legacy" ? '<p class="coverage-note">Registro histórico. Sólo se dispone de los estados operativos guardados antes de incorporar la telemetría.</p>' : ""}<div class="detail-kpis"><div><span>Respuesta del cliente</span><strong>${result.customer_answered_at ? esc(time(result.customer_answered_at)) : "Sin evidencia"}</strong><small>${esc(result.amd_label)}</small></div><div><span>Conectado</span><strong>${seconds(result.customer_connected_seconds)}</strong><small>Tramo del cliente</small></div><div><span>Con agente</span><strong>${seconds(result.bridge_seconds)}</strong><small>${result.transfer_requested_at ? "Solicitado por el cliente · opción 2" : "Sin solicitud observada"}</small></div><div><span>Finalizó la sesión</span><strong>${esc(actors[result.end_actor])}</strong><small>${esc(reasons[result.end_reason] || result.end_reason || "Sin evidencia")}</small></div></div>${keypad}${recordingMarkup(result, ctx.state.user?.role)}<section class="chart-panel detail-legs"><h2>Tramos de la llamada</h2><div class="table-scroll">${legRows.length ? table(["Tramo","Número","Troncal","INVITE","Timbrado","Respuesta","Desconexión","Conectado","Finalizó","SIP"],legRows) : '<p class="no-measurements">No se guardaron tramos para este registro.</p>'}</div><p class="chart-footnote">${esc(time(result.started_at,true))} · ${esc(ctx.state.status.reporting_timezone)}. La identidad real o un desvío interno de la troncal pueden no ser observables.</p></section><div class="detail-bottom"><section class="chart-panel"><h2>Recorrido de la llamada</h2><ol class="call-timeline">${history || '<li>Sin eventos detallados disponibles.</li>'}</ol><details class="history-details"><summary>Ver estados operativos (${result.history.length})</summary><ol class="event-list">${result.history.map(e=>`<li><strong>${esc(ctx.labels[e.status] || e.status)}</strong> · ${esc(e.detail)}<time>${esc(time(e.created_at,true))}</time></li>`).join("")}</ol></details></section><aside class="evidence-panel"><h2>Evidencia y mediciones</h2><dl><dt>Credito</dt><dd>${esc(result.credit_id || "Sin crédito histórico")}</dd><dt>ID de llamada</dt><dd>${esc(result.id)}</dd><dt>ID de contacto en campaña</dt><dd>${esc(result.contact_id)}</dd><dt>Intento anterior</dt><dd>${result.retry_of ? `<button class="text-link" data-action="open-cdr" data-id="${esc(result.retry_of)}">Ver CDR del intento anterior</button>` : "Primera llamada"}</dd><dt>Cobertura</dt><dd>${result.coverage === "legacy" ? "Histórica, sin telemetría" : "Telemetría de esta versión"}</dd><dt>Clasificación AMD</dt><dd>${esc(result.amd_label)}${result.amd_reason ? ` · ${esc(result.amd_reason)}` : ""}</dd><dt>Tiempo de análisis</dt><dd>${result.amd_elapsed_ms == null ? "—" : seconds(result.amd_elapsed_ms/1000)}</dd><dt>Generación TTS</dt><dd>${result.tts_ms == null ? "—" : seconds(result.tts_ms/1000)}</dd><dt>Repeticiones</dt><dd>${n(result.replays)}</dd><dt>Evidencia de finalización</dt><dd>${esc(result.end_evidence || "Desconocida")}</dd>${result.legs.map(leg=>`<dt>Call-ID ${leg.role.startsWith("customer") ? "cliente" : "agente"}</dt><dd>${esc(leg.call_id || "No disponible")}</dd>`).join("")}<dt>Resultado operativo</dt><dd>${esc(result.detail)}</dd></dl></aside></div>`);
+  const backLabel = t(detailOrigin === "traceability" ? "Volver al historial del cliente" : "Volver a las llamadas");
+  ctx.setHTML($("#cdr-detail"), `<button class="text-link back-link" data-action="back-calls">${backLabel}</button><div class="section-heading"><div><h2 class="detail-title">${esc(result.contact_name || result.phone)}</h2><p>${esc(result.phone)} · ${t("Crédito")} ${esc(result.credit_id || t("Sin crédito histórico"))} · ${esc(result.campaign_name)} · ${t("Intento")} ${n(result.attempt_number || 1)}</p><p class="detail-route">${t("Proveedor:")} ${esc(trunkLabel(result))}</p></div>${ctx.badge(result.status)}</div>${result.coverage === "legacy" ? '<p class="coverage-note">Este registro conserva únicamente la información disponible en el momento de la llamada.</p>' : ""}<div class="detail-kpis"><div><span>Respuesta del cliente</span><strong>${result.customer_answered_at ? esc(time(result.customer_answered_at)) : "Sin información"}</strong><small>${esc(translateText(result.amd_label))}</small></div><div><span>Tiempo conectado</span><strong>${seconds(result.customer_connected_seconds)}</strong><small>Conversación con el cliente</small></div><div><span>Con agente</span><strong>${seconds(result.bridge_seconds)}</strong><small>${result.transfer_requested_at ? "Solicitado por el cliente · opción 2" : "No solicitó transferencia"}</small></div><div><span>Finalizó la llamada</span><strong>${esc(actors[result.end_actor])}</strong><small>${esc(reasons[result.end_reason] || "Sin información")}</small></div></div>${keypad}${recordingMarkup(result, ctx.state.user?.role)}<section class="chart-panel detail-legs"><h2>Etapas de la llamada</h2><div class="table-scroll">${legRows.length ? table(["Participante","Número","Proveedor","Inicio","Timbrado","Respuesta","Finalización","Tiempo conectado","Finalizó"],legRows) : '<p class="no-measurements">No hay etapas disponibles para esta llamada.</p>'}</div><p class="chart-footnote">${esc(time(result.started_at,true))} · ${esc(ctx.state.status.reporting_timezone)}. Cada intento conserva el proveedor utilizado, incluidos los cambios al respaldo.</p></section><div class="detail-bottom"><section class="chart-panel"><h2>Recorrido de la llamada</h2><ol class="call-timeline">${history || '<li>No hay actividad detallada disponible.</li>'}</ol><details class="history-details"><summary>Ver actividad completa (${result.history.length})</summary><ol class="event-list">${result.history.map(e=>`<li><strong>${esc(ctx.labels[e.status] || t("Actividad actualizada"))}</strong>${e.detail ? ` · ${esc(ctx.commercialText(e.detail))}` : ""}<time>${esc(time(e.created_at,true))}</time></li>`).join("")}</ol></details></section><aside class="evidence-panel"><h2>Información de seguimiento</h2><dl><dt>Crédito</dt><dd>${esc(result.credit_id || t("Sin crédito histórico"))}</dd><dt>Proveedor del cliente</dt><dd>${esc(trunkLabel(result))}</dd><dt>Proveedor de transferencia</dt><dd>${esc(trunkLabel(result,"agent"))}</dd><dt>Referencia de llamada</dt><dd>${esc(result.id)}</dd><dt>Referencia del contacto</dt><dd>${esc(result.contact_id)}</dd><dt>Intento anterior</dt><dd>${result.retry_of ? `<button class="text-link" data-action="open-cdr" data-id="${esc(result.retry_of)}">Ver intento anterior</button>` : "Primera llamada"}</dd><dt>Información disponible</dt><dd>${result.coverage === "legacy" ? "Registro anterior" : "Registro completo"}</dd><dt>Tipo de respuesta</dt><dd>${esc(translateText(result.amd_label))}${result.amd_reason ? ` · ${esc(responseReasons[result.amd_reason] || t("Motivo registrado"))}` : ""}</dd><dt>Tiempo para identificar la respuesta</dt><dd>${result.amd_elapsed_ms == null ? "—" : seconds(result.amd_elapsed_ms/1000)}</dd><dt>Preparación del mensaje</dt><dd>${result.tts_ms == null ? "—" : seconds(result.tts_ms/1000)}</dd><dt>Repeticiones</dt><dd>${n(result.replays)}</dd><dt>Finalización</dt><dd>${esc(ctx.commercialText(result.end_evidence || "No identificada"))}</dd><dt>Resultado final</dt><dd>${esc(ctx.commercialText(result.detail))}</dd></dl></aside></div>`);
   if (focus) { $("#cdr-detail").focus({preventScroll:true}); $("#cdr-detail").scrollIntoView({block:"start"}); }
 }
 
@@ -242,16 +271,17 @@ async function download(format) {
   downloaded = true;
   const buttons = [...document.querySelectorAll('[data-action="download-xlsx"], [data-action="download-csv"]')];
   buttons.forEach(b=>b.disabled=true);
-  $("#report-progress").textContent = "Preparando el archivo… Las llamadas continúan en segundo plano.";
+  $("#report-progress").textContent = t("Preparando el archivo… Las llamadas continúan en segundo plano.");
   try {
-    const params = ctx.state.view === "calls" ? callQuery() : query;
-    const response = await fetch(`/api/reports/${format}?${params}`);
-    if (!response.ok) { const error = await response.json(); throw new Error(error.detail || "No fue posible generar el reporte."); }
+    const params = ctx.state.view === "calls" ? callQuery() : new URLSearchParams(query);
+    params.set("lang", getLanguage());
+    const response = await fetch(`/api/reports/${format}?${params}`, {headers:{"Accept-Language":getLanguage()}});
+    if (!response.ok) { const error = await response.json(); throw new Error(ctx.commercialError(error.detail || "No fue posible generar el reporte.")); }
     const url = URL.createObjectURL(await response.blob()), anchor = document.createElement("a");
     anchor.href = url; anchor.download = `blaster-${dayInZone()}.${format}`;
     anchor.click(); setTimeout(()=>URL.revokeObjectURL(url),10000);
-    $("#report-progress").textContent = "Archivo generado. La descarga está lista.";
-  } catch(error) { $("#report-progress").textContent = "No se pudo generar el archivo."; throw error; }
+    $("#report-progress").textContent = t("Archivo generado. La descarga está lista.");
+  } catch(error) { $("#report-progress").textContent = t("No se pudo generar el archivo."); throw error; }
   finally { downloaded = false; buttons.forEach(b=>b.disabled=false); }
 }
 

@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+
+from blaster.recordings import safe_recording_path
+
+_EN_VALUES = {
+    "Finalizada": "Completed",
+    "Buzón probable": "Probable voicemail",
+    "Respuesta no identificada": "Unidentified answer",
+    "Sin respuesta": "No answer",
+    "Sin selección": "No selection",
+    "Ocupada": "Busy",
+    "Fallida": "Failed",
+    "Proveedor no disponible": "Provider unavailable",
+    "Cancelada": "Canceled",
+    "Interrumpida": "Interrupted",
+}
 
 
 def migrate(db, path: Path) -> None:
@@ -34,17 +48,38 @@ def _safe_cell(value) -> str:
 
 
 def build_recording_bundle(
-    target: Path, rows: list[dict], xlsx: bytes, recording_directory: Path
+    target: Path,
+    rows: list[dict],
+    xlsx: bytes,
+    recording_directory: Path,
+    language: str = "es",
 ) -> dict:
     """Write the report, manifest and trustworthy ready Ogg files into a ZIP."""
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     root = recording_directory.resolve()
     manifest = io.StringIO(newline="")
     writer = csv.writer(manifest, lineterminator="\n")
-    writer.writerow(
+    headers = (
         [
+            "account",
+            "phone",
+            "provider",
+            "provider_id",
+            "call_id",
+            "campaign",
+            "started",
+            "outcome",
+            "attempt",
+            "recording_status",
+            "file_in_zip",
+            "details",
+        ]
+        if language == "en"
+        else [
             "credito",
             "telefono",
+            "troncal",
+            "id_troncal",
             "id_llamada",
             "campaña",
             "inicio",
@@ -55,43 +90,57 @@ def build_recording_bundle(
             "detalle",
         ]
     )
+    writer.writerow(headers)
     included, unavailable, bytes_total = 0, 0, 0
     with ZipFile(target, "w", allowZip64=True) as archive:
-        archive.writestr("reporte-trazabilidad.xlsx", xlsx, compress_type=ZIP_DEFLATED)
+        archive.writestr(
+            "tracking-report.xlsx" if language == "en" else "reporte-trazabilidad.xlsx",
+            xlsx,
+            compress_type=ZIP_DEFLATED,
+        )
         audio_entries = []
         for row in rows:
             jid = str(row["id"])
             stored_name = row.get("recording_filename")
-            status = row.get("recording_status") or "sin_grabacion"
+            status = row.get("recording_status") or (
+                "no_recording" if language == "en" else "sin_grabacion"
+            )
             archive_name, detail = "", row.get("recording_detail") or ""
-            source = recording_directory / f"{jid}.ogg"
-            valid_id = bool(re.fullmatch(r"[0-9a-f]{32}", jid))
+            source = safe_recording_path(recording_directory, stored_name)
             ready = (
                 status == "ready"
-                and valid_id
-                and stored_name == f"{jid}.ogg"
-                and not source.is_symlink()
+                and source is not None
                 and source.is_file()
                 and source.resolve().parent == root
             )
             if ready:
-                archive_name = f"grabaciones/{row['started_at'][:10]}_{jid}.ogg"
+                archive_name = f"{'recordings' if language == 'en' else 'grabaciones'}/{source.name}"
                 audio_entries.append((source, archive_name))
                 included += 1
                 bytes_total += source.stat().st_size
-                detail = "Incluida"
+                detail = "Included" if language == "en" else "Incluida"
             else:
                 unavailable += 1
                 if status == "ready":
-                    status, detail = "archivo_no_disponible", "El archivo ya no está disponible"
+                    status, detail = (
+                        ("file_unavailable", "The file is no longer available")
+                        if language == "en"
+                        else ("archivo_no_disponible", "El archivo ya no está disponible")
+                    )
             writer.writerow(
                 [
                     _safe_cell(row.get("credit_id")),
                     _safe_cell(row.get("phone")),
+                    _safe_cell(row.get("customer_trunk_name")),
+                    _safe_cell(row.get("customer_trunk_id")),
                     jid,
                     _safe_cell(row.get("campaign_name")),
                     row.get("started_at") or "",
-                    _safe_cell(row.get("status_label")),
+                    _safe_cell(
+                        _EN_VALUES.get(row.get("status_label"), row.get("status_label"))
+                        if language == "en"
+                        else row.get("status_label")
+                    ),
                     row.get("attempt_number") or 1,
                     status,
                     archive_name,
@@ -99,7 +148,7 @@ def build_recording_bundle(
                 ]
             )
         archive.writestr(
-            "manifest-grabaciones.csv",
+            "recording-manifest.csv" if language == "en" else "manifest-grabaciones.csv",
             "\ufeff" + manifest.getvalue(),
             compress_type=ZIP_DEFLATED,
         )

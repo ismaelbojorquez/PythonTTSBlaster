@@ -10,6 +10,7 @@
 - [Solución de problemas](troubleshooting.md): instalación, acceso, SIP y audio.
 - [AMD](amd.md): reglas acústicas, incertidumbre y calibración.
 - [Vista previa TTS](tts-preview.md): escuchar el mensaje antes de crear la campaña.
+- [Evaluación de Kokoro](kokoro-experiment.md): instalación comercial, medición y reversión.
 
 ## Entender y contribuir
 

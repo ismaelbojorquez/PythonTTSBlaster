@@ -161,7 +161,16 @@ class CampaignInput(BaseModel):
             try:
                 render_message(
                     self.template,
-                    {**contact.variables, "telefono": contact.phone, "credito": contact.credit_id},
+                    {
+                        **contact.variables,
+                        "telefono": contact.phone,
+                        "phone": contact.phone,
+                        "telephone": contact.phone,
+                        "credito": contact.credit_id,
+                        "credit": contact.credit_id,
+                        "account": contact.credit_id,
+                        "account_id": contact.credit_id,
+                    },
                 )
             except ValueError as error:
                 raise ValueError(f"Fila {index}: {error}") from error

@@ -57,9 +57,9 @@ class AMDSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False  # Existing configurations keep their previous call flow.
-    unknown_action: Literal["hangup", "continue"] = "continue"
-    total_analysis_ms: int = Field(default=5000, ge=1000, le=15000)
-    initial_silence_ms: int = Field(default=2500, ge=500, le=10000)
+    unknown_action: Literal["hangup", "continue"] = "hangup"
+    total_analysis_ms: int = Field(default=6500, ge=1000, le=15000)
+    initial_silence_ms: int = Field(default=5000, ge=500, le=10000)
     after_greeting_silence_ms: int = Field(default=1000, ge=300, le=3000)
     greeting_speech_ms: int = Field(default=2400, ge=500, le=10000)
     minimum_word_ms: int = Field(default=100, ge=40, le=500)
@@ -73,6 +73,9 @@ class AMDSettings(BaseModel):
     beep_max_hz: int = Field(default=2000, ge=500, le=3500)
     beep_purity: float = Field(default=0.90, ge=0.8, le=0.99)
     beep_frequency_tolerance_hz: int = Field(default=35, ge=10, le=100)
+    calibration_capture_enabled: bool = False
+    calibration_retention_days: int = Field(default=14, ge=1, le=365)
+    calibration_max_samples: int = Field(default=500, ge=10, le=5000)
 
     @model_validator(mode="after")
     def coherent_timings(self) -> AMDSettings:
@@ -98,7 +101,7 @@ class TrunkSettings(BaseModel):
     enabled: bool = True
     priority: int = Field(default=10, ge=0, le=1000)
     weight: int = Field(default=1, ge=1, le=100)
-    channels: int = Field(default=10, ge=2, le=60)
+    channels: int = Field(default=40, ge=2, le=60)
     calls_per_second: float = Field(default=1, gt=0, le=20)
     sip: SIPSettings = Field(default_factory=SIPSettings)
 
@@ -139,6 +142,20 @@ class AutomationSettings(BaseModel):
     report_retention_days: int = Field(default=90, ge=1, le=3650)
 
 
+class KokoroSettings(BaseModel):
+    """Optional commercial-friendly TTS engine isolated from the main environment."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    python: Path = Path(".venv-kokoro/bin/python")
+    model: Path = Path(".cache/kokoro/models/kokoro-v1.0.onnx")
+    voices: Path = Path(".cache/kokoro/models/voices-v1.0.bin")
+    voice: str = Field(default="ef_dora", pattern=r"^[a-z]{2}_[a-z0-9_]+$", max_length=80)
+    language: str = Field(default="es", pattern=r"^[a-z]{2}(?:-[a-z]{2})?$", max_length=10)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    startup_timeout: float = Field(default=90, ge=10, le=600)
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     mode: Literal["simulation", "sip"] = "simulation"
@@ -147,8 +164,8 @@ class Settings(BaseModel):
     data_dir: Path = Path("data")
     reporting_timezone: str = "America/Mexico_City"
     report_max_rows: int = Field(default=20000, ge=100, le=100000)
-    concurrency: int = Field(default=3, ge=1, le=30)
-    trunk_channels: int = Field(default=10, ge=2, le=60)
+    concurrency: int = Field(default=20, ge=1, le=30)
+    trunk_channels: int = Field(default=40, ge=2, le=60)
     calls_per_second: float = Field(default=1, gt=0, le=20)
     ring_timeout: float = Field(default=40, gt=0, le=180)
     agent_timeout: float = Field(default=30, gt=0, le=180)
@@ -157,7 +174,9 @@ class Settings(BaseModel):
     max_repeats: int = Field(default=2, ge=0, le=10)
     tts_workers: int = Field(default=2, ge=1, le=8)
     tts_timeout: float = Field(default=90, gt=0, le=300)
+    tts_engine: Literal["piper", "kokoro"] = "piper"
     voice_model: Path = Path("voices/es_MX-claude-high.onnx")
+    kokoro: KokoroSettings = Field(default_factory=KokoroSettings)
     sip: SIPSettings = Field(default_factory=SIPSettings)
     amd: AMDSettings = Field(default_factory=AMDSettings)
     trunks: list[TrunkSettings] = Field(default_factory=list, max_length=8)
@@ -223,6 +242,8 @@ class Settings(BaseModel):
                 raise ValueError("RTP necesita puerto inicial par y 2 puertos por canal")
         if len({t.id for t in self.trunks}) != len(self.trunks):
             raise ValueError("Cada troncal debe tener un id único")
+        if self.tts_engine == "kokoro" and not self.kokoro.enabled:
+            raise ValueError("Activa kokoro.enabled para usar una voz Kokoro")
         for trunk in self.trunks:
             sip = trunk.sip
             if (
@@ -243,8 +264,13 @@ class Settings(BaseModel):
                 raise ValueError(
                     f"Configura sip.password en config.toml para la troncal {trunk.id}"
                 )
-        if not self.voice_model.is_file() or not Path(f"{self.voice_model}.json").is_file():
-            raise ValueError("Faltan el modelo Piper .onnx y su archivo .onnx.json")
+        if self.tts_engine == "piper":
+            if not self.voice_model.is_file() or not Path(f"{self.voice_model}.json").is_file():
+                raise ValueError("Faltan el modelo Piper .onnx y su archivo .onnx.json")
+        elif self.tts_engine == "kokoro" and not all(
+            path.is_file() for path in (self.kokoro.python, self.kokoro.model, self.kokoro.voices)
+        ):
+            raise ValueError("Faltan los archivos locales de Kokoro")
 
 
 def load_settings(path: Path | None) -> Settings:
@@ -259,4 +285,8 @@ def load_settings(path: Path | None) -> Settings:
         value = getattr(settings, key)
         if not value.is_absolute():
             setattr(settings, key, path.resolve().parent / value)
+    for key in ("python", "model", "voices"):
+        value = getattr(settings.kokoro, key)
+        if not value.is_absolute():
+            setattr(settings.kokoro, key, path.resolve().parent / value)
     return settings

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatTimestamp, auditPresentation } from "../src/blaster/static/management.js";
+globalThis.localStorage = {getItem: () => "es"};
+const {formatTimestamp, auditPresentation} = await import("../src/blaster/static/management.js");
 
 test("programmed times retain their own timezone across seasonal offsets", () => {
   const september="2026-09-15T14:00:00Z";

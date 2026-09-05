@@ -46,7 +46,7 @@ def test_dual_tones_dtmf_and_out_of_band_tones_are_not_beeps(frequencies):
 
 
 def test_short_tone_does_not_satisfy_beep_duration():
-    result = classify(signal(80, (1000,)) + silence(2700))
+    result = classify(signal(80, (1000,)) + silence(5200))
     assert result.verdict == "unknown"
 
 
@@ -54,10 +54,10 @@ def test_initial_silence_noise_clicks_and_dc_are_not_proof_of_voicemail():
     import numpy as np
 
     signals = [
-        silence(3000),
-        signal(3000, amplitude=20),
-        (signal(20) + silence(100)) * 25,
-        np.full(24000, 1500, dtype=np.int16).tobytes(),
+        silence(5200),
+        signal(5200, amplitude=20),
+        (signal(20) + silence(100)) * 44,
+        np.full(41600, 1500, dtype=np.int16).tobytes(),
     ]
     for pcm in signals:
         result = classify(pcm)
@@ -65,9 +65,9 @@ def test_initial_silence_noise_clicks_and_dc_are_not_proof_of_voicemail():
 
 
 def test_analysis_time_is_bounded_when_neither_pattern_wins():
-    result = classify((signal(100) + silence(700)) * 8, maximum_words=20)
+    result = classify((signal(100) + silence(700)) * 9, maximum_words=20)
     assert (result.verdict, result.reason) == ("unknown", "analysis_timeout")
-    assert result.audio_ms == 5000
+    assert result.audio_ms == 6500
 
 
 def test_independent_detectors_and_arbitrary_pcm_chunk_boundaries():
@@ -96,7 +96,7 @@ def test_clicks_in_pause_do_not_restart_the_human_silence_clock():
 
 
 def test_a_single_short_qualified_burst_is_not_enough_to_accept_human():
-    result = classify(signal(120) + silence(5200))
+    result = classify(signal(120) + silence(6400))
     assert result.verdict == "unknown"
     assert result.voiced_ms == 120
 
@@ -108,7 +108,7 @@ def test_a_greeting_starting_just_before_initial_deadline_can_finish():
 
 
 def test_tone_below_beep_duration_is_not_accepted_as_human_speech():
-    result = classify(signal(280, (1000,)) + silence(3000), beep_min_ms=360)
+    result = classify(signal(280, (1000,)) + silence(5200), beep_min_ms=360)
     assert result.verdict == "unknown"
     assert result.voiced_ms == 0
 
@@ -118,15 +118,15 @@ def test_calibrated_example_handles_long_human_and_machine_with_internal_pause()
 
     profile = load_settings(Path(__file__).resolve().parents[1] / "config.example.toml").amd
     options = profile.model_dump()
-    assert options["total_analysis_ms"] == 5000
-    assert options["unknown_action"] == "continue"
+    assert options["total_analysis_ms"] == 6500
+    assert options["unknown_action"] == "hangup"
     human = classify(signal(2800) + silence(1800), **options)
     assert human.verdict == "human"
     paused_machine = classify(signal(800) + silence(1200) + signal(3000), **options)
     assert (paused_machine.verdict, paused_machine.reason) == ("machine", "long_greeting")
     fragmented_human = classify((signal(180) + silence(120)) * 7 + silence(1500), **options)
     assert fragmented_human.verdict == "human"
-    late_human = classify(silence(3140) + signal(400) + silence(1600), **options)
+    late_human = classify(silence(4640) + signal(400) + silence(1600), **options)
     assert late_human.verdict == "human"
     assert classify(signal(600, (1000,)), **options).reason == "beep"
 
@@ -197,7 +197,7 @@ def test_amd_toml_and_validation(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[amd]\nenabled = true\nunknown_action = "continue"\n')
     assert load_settings(path).amd.unknown_action == "continue"
-    assert AMDSettings().unknown_action == "continue"
+    assert AMDSettings().unknown_action == "hangup"
     assert not Settings().amd.enabled
     for bad in (
         {"unknown_action": "guess"}, {"total_analysis_ms": 999},

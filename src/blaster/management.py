@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -19,16 +20,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from blaster.agent_pool import AgentStrategy
 from blaster.automation import campaign_due_at, next_report
-from blaster.config import AutomationSettings, RecordingSettings, Settings, TrunkSettings
+from blaster.config import (
+    AMDSettings,
+    AutomationSettings,
+    RecordingSettings,
+    Settings,
+    TrunkSettings,
+)
 from blaster.countries import (
     country_code,
     national_display,
     stored_number_country,
 )
 from blaster.models import render_message, template_variables, transfer_numbers
+from blaster.recordings import safe_recording_path
 from blaster.routing import TrunkRouter
 from blaster.security import Credentials, UserInput, password_hash, safe_user, verify
 from blaster.store import agent_settings, now
+from blaster.tts import close_speech
+from blaster.voices import KOKORO_PREFIX
 
 
 class TemplateInput(BaseModel):
@@ -73,8 +83,17 @@ class GlobalInput(BaseModel):
     max_call_seconds: float = Field(gt=0, le=14400)
     reporting_timezone: str
     report_max_rows: int = Field(ge=100, le=100000)
+    amd: AMDSettings
     recordings: RecordingSettings
     automation: AutomationSettings
+
+
+class AMDCalibrationLabel(BaseModel):
+    label: Literal["human", "machine"]
+
+
+class VoiceInput(BaseModel):
+    model: str = Field(min_length=1, max_length=255)
 
 
 def profile_data(t):
@@ -97,7 +116,13 @@ def write_config(path, updates):
     text = path.read_text()
     doc = tomlkit.parse(text)
     for key, value in updates.items():
-        doc[key] = value
+        target = doc
+        parts = key.split(".")
+        for part in parts[:-1]:
+            if part not in target:
+                target[part] = tomlkit.table()
+            target = target[part]
+        target[parts[-1]] = value
     content = tomlkit.dumps(doc)
     fd, temp = tempfile.mkstemp(prefix=".config-", suffix=".toml", dir=path.parent)
     try:
@@ -322,6 +347,117 @@ def management_router():
         )
         return {"ok": True}
 
+    @router.get("/api/manage/voices")
+    async def voices(request: Request):
+        return await asyncio.to_thread(request.app.state.voice_manager.catalog)
+
+    @router.post("/api/manage/voices/benchmark")
+    async def benchmark_voice(payload: VoiceInput, request: Request):
+        app = request.app
+        engine, manager = app.state.engine, app.state.voice_manager
+        if manager.lock.locked() or app.state.speech_preview.lock.locked():
+            raise HTTPException(429, "Ya se está midiendo una voz. Espera a que termine.")
+        if engine.sessions or engine.active_campaign or engine.router.reloading:
+            raise HTTPException(
+                409, "Detén la campaña y espera a que terminen las llamadas para medir voces."
+            )
+        engine.router.reloading = True
+        speech = None
+        try:
+            async with manager.lock:
+                async with asyncio.timeout(engine.settings.tts_timeout):
+                    speech, result, audio = await manager.measure(payload.model, 1)
+            return manager.response(payload.model, result, audio)
+        except TimeoutError as error:
+            raise HTTPException(
+                504, "La voz superó el tiempo máximo de generación configurado."
+            ) from error
+        except ValueError:
+            raise
+        except Exception as error:
+            raise HTTPException(
+                503,
+                "No pudimos preparar esta voz. Comprueba su instalación e inténtalo nuevamente.",
+            ) from error
+        finally:
+            if speech is not None:
+                await close_speech(speech)
+            engine.router.reloading = False
+            engine.wakeup.set()
+
+    @router.post("/api/manage/voices/select")
+    async def select_voice(payload: VoiceInput, request: Request):
+        app = request.app
+        engine, manager = app.state.engine, app.state.voice_manager
+        settings = engine.settings
+        if manager.lock.locked() or app.state.speech_preview.lock.locked():
+            raise HTTPException(429, "Ya se está preparando una voz. Espera a que termine.")
+        if engine.sessions or engine.active_campaign or engine.router.reloading:
+            raise HTTPException(
+                409, "Detén la campaña y espera a que terminen las llamadas para cambiar la voz."
+            )
+        if not settings.config_path:
+            raise HTTPException(409, "Inicia con --config config.toml para guardar la voz.")
+        kokoro_voice = (
+            manager.kokoro_voice(payload.model)
+            if payload.model.startswith(KOKORO_PREFIX)
+            else None
+        )
+        model = None if kokoro_voice else manager.resolve(payload.model)
+        engine.router.reloading = True
+        speech = None
+        activated = False
+        try:
+            async with manager.lock:
+                async with asyncio.timeout(settings.tts_timeout):
+                    speech, result, audio = await manager.measure(
+                        payload.model, settings.tts_workers
+                    )
+                updates = {"tts_engine": "kokoro", "kokoro.voice": kokoro_voice}
+                if model is not None:
+                    try:
+                        stored_model = model.relative_to(settings.config_path.parent).as_posix()
+                    except ValueError:
+                        stored_model = str(model)
+                    updates = {"tts_engine": "piper", "voice_model": stored_model}
+                try:
+                    write_config(settings.config_path, updates)
+                except OSError as error:
+                    raise ValueError("No se pudo guardar la voz en config.toml") from error
+                old_speeches = {
+                    id(value): value
+                    for value in (engine.speech, app.state.speech_preview.speech)
+                    if value
+                }
+                settings.tts_engine = updates["tts_engine"]
+                if model is not None:
+                    settings.voice_model = model
+                else:
+                    settings.kokoro.voice = kokoro_voice
+                if settings.mode == "sip":
+                    engine.speech = speech
+                app.state.speech_preview.speech = speech
+                activated = True
+                for old in old_speeches.values():
+                    if old is not speech:
+                        await close_speech(old)
+            return manager.response(payload.model, result, audio)
+        except TimeoutError as error:
+            raise HTTPException(
+                504, "La voz superó el tiempo máximo y no se activó."
+            ) from error
+        except ValueError:
+            raise
+        except Exception as error:
+            raise HTTPException(
+                503, "No se pudo cargar la voz; la configuración anterior sigue activa."
+            ) from error
+        finally:
+            if speech is not None and not activated:
+                await close_speech(speech)
+            engine.router.reloading = False
+            engine.wakeup.set()
+
     @router.get("/api/manage/trunks/{tid}/history")
     async def trunk_history(tid: str, request: Request, offset: int = 0):
         return ops(request).rows(
@@ -409,14 +545,27 @@ def management_router():
     async def create_schedule(payload: ScheduleInput, request: Request):
         engine = request.app.state.engine
         campaign = engine.store.campaign(payload.campaign_id)
+        if not engine.settings.automation.enabled:
+            raise ValueError(
+                "Activa las tareas programadas en Configuración antes de programar"
+            )
         if campaign["mode"] != engine.settings.mode:
             raise ValueError("La campaña pertenece a otro modo de telefonía")
-        if engine.active_campaign == payload.campaign_id:
-            raise ValueError("La campaña está activa; detenla antes de programar")
+        if campaign["status"] != "draft" or engine.store.db.execute(
+            "SELECT 1 FROM jobs WHERE campaign_id=? AND started_at IS NOT NULL LIMIT 1",
+            (payload.campaign_id,),
+        ).fetchone():
+            raise ValueError("Sólo se puede programar una campaña en borrador")
         if not engine.store.next_queued(payload.campaign_id):
             raise ValueError("La campaña no tiene contactos pendientes")
         due = campaign_due_at(payload.local_at, payload.timezone)
         sid = uuid4().hex
+        created_at = now()
+        audit_detail = {
+            "schedule_id": sid,
+            "due_at": due.isoformat(),
+            "timezone": payload.timezone,
+        }
         try:
             with ops(request).db:
                 ops(request).db.execute(
@@ -428,12 +577,24 @@ def management_router():
                         due.isoformat(),
                         payload.timezone,
                         request.state.user["id"],
-                        now(),
+                        created_at,
+                    ),
+                )
+                ops(request).db.execute(
+                    "INSERT INTO audit(created_at,actor_id,actor_name,action,target,detail) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        created_at,
+                        request.state.user.get("id"),
+                        request.state.user.get("username", "local"),
+                        "campaign.scheduled_from_draft",
+                        payload.campaign_id,
+                        json.dumps(audit_detail, ensure_ascii=False),
                     ),
                 )
         except sqlite3.IntegrityError as error:
             raise ValueError("La campaña ya tiene una programación pendiente") from error
-        return {"id": sid, "due_at": due.isoformat()}
+        return {"id": sid, "due_at": due.isoformat(), "timezone": payload.timezone}
 
     @router.post("/api/manage/schedules/{sid}/cancel")
     async def cancel_schedule(sid: str, request: Request):
@@ -518,6 +679,83 @@ def management_router():
             )
         return {"ok": True}
 
+    def calibration(request: Request):
+        return request.app.state.engine.amd_calibration
+
+    @router.get("/api/amd-calibration")
+    async def calibration_samples(
+        request: Request,
+        label: Literal["pending", "human", "machine", "disagreement", "all"] = "pending",
+        limit: int = 100,
+        offset: int = 0,
+    ):
+        return calibration(request).list(
+            label=label,
+            limit=min(200, max(1, limit)),
+            offset=max(0, offset),
+        )
+
+    @router.get("/api/amd-calibration/{sample_id}/audio")
+    async def calibration_audio(sample_id: str, request: Request):
+        if not re.fullmatch(r"[a-f0-9]{32}", sample_id):
+            raise KeyError(sample_id)
+        row = calibration(request).get(sample_id)
+        path = calibration(request).directory / (sample_id + ".wav")
+        if (
+            row["filename"] != path.name
+            or path.is_symlink()
+            or not path.is_file()
+            or path.resolve().parent != calibration(request).directory.resolve()
+        ):
+            raise KeyError(sample_id)
+        ops(request).audit(
+            request.state.user,
+            "amd_calibration.listen",
+            sample_id,
+            {"job_id": row["job_id"]},
+        )
+        return FileResponse(
+            path,
+            media_type="audio/wav",
+            filename="saludo-amd.wav",
+            content_disposition_type="inline",
+        )
+
+    @router.post("/api/amd-calibration/{sample_id}/label")
+    async def label_calibration_sample(
+        sample_id: str, payload: AMDCalibrationLabel, request: Request
+    ):
+        result = calibration(request).label(sample_id, payload.label, request.state.user)
+        ops(request).audit(
+            request.state.user,
+            "amd_calibration.labeled",
+            sample_id,
+            result,
+        )
+        return result
+
+    @router.post("/api/amd-calibration/{sample_id}/delete")
+    async def delete_calibration_sample(sample_id: str, request: Request):
+        row = calibration(request).delete(sample_id)
+        ops(request).audit(
+            request.state.user,
+            "amd_calibration.deleted",
+            sample_id,
+            {"job_id": row["job_id"], "label": row["label"]},
+        )
+        return {"ok": True}
+
+    @router.post("/api/amd-calibration/delete-all")
+    async def delete_all_calibration_samples(request: Request):
+        count = calibration(request).delete_all()
+        ops(request).audit(
+            request.state.user,
+            "amd_calibration.deleted_all",
+            "amd-calibration",
+            {"samples": count},
+        )
+        return {"ok": True, "deleted": count}
+
     @router.get("/api/recordings/{jid}")
     async def recording(jid: str, request: Request):
         row = (
@@ -527,12 +765,17 @@ def management_router():
         )
         if not row:
             raise KeyError(jid)
-        path = request.app.state.engine.recordings.directory / (jid + ".ogg")
-        if not path.is_file():
+        path = safe_recording_path(
+            request.app.state.engine.recordings.directory, row["filename"]
+        )
+        if path is None or not path.is_file():
             raise KeyError(jid)
         ops(request).audit(request.state.user, "recording.listen", jid)
         return FileResponse(
-            path, media_type="audio/ogg", filename=jid + ".ogg", content_disposition_type="inline"
+            path,
+            media_type="audio/ogg",
+            filename=path.name,
+            content_disposition_type="inline",
         )
 
     return router

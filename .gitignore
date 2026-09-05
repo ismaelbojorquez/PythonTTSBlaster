@@ -15,6 +15,7 @@ config.toml.*
 
 # Entornos, dependencias y compilación de Python / PJSUA2.
 .venv/
+.venv-kokoro/
 venv/
 env/
 __pycache__/
@@ -67,6 +68,7 @@ wheels/
 
 # Cachés, pruebas, registros y archivos temporales.
 .pytest_cache/
+.cache/kokoro/
 .ruff_cache/
 .mypy_cache/
 .tox/

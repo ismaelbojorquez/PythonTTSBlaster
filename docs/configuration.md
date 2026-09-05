@@ -20,6 +20,7 @@ no deben pegarse creando secciones duplicadas.
 | `reporting_timezone` | Zona IANA para presentar fechas; la base conserva UTC |
 | `report_max_rows` | Límite por exportación; reduce el período si se excede |
 | `voice_model` | Archivo Piper `.onnx`, acompañado por `.onnx.json` |
+| `tts_engine` | Voz activa: `piper` o `kokoro` |
 | `tts_workers` | Síntesis simultáneas, de 1 a 8; empieza con 2 y mide |
 | `tts_timeout` | Límite de espera de síntesis en segundos |
 
@@ -34,9 +35,30 @@ cookies como Secure, pero no habilita HTTPS en Uvicorn. En desarrollo local pued
 estar vacío; el servicio de producción exige un valor y autenticación activa.
 
 La voz predeterminada es `es_MX-claude-high`. El instalador la descarga si falta.
-Para otra voz Piper, configura su nombre antes de preparar una instalación nueva
-o descarga el modelo y su JSON al directorio de voces y cambia `voice_model` con
-el servicio detenido. La vista previa utiliza el mismo modelo que las llamadas.
+Para agregar otra voz Piper, descarga su `.onnx` y `.onnx.json` dentro del mismo
+directorio. Después abre **Operación → Voces**: el panel descubre los modelos,
+permite escucharlos, mide su rendimiento local y cambia `voice_model` en el TOML.
+El cambio sólo se permite sin campaña activa y la nueva voz se precarga antes de
+guardarla, por lo que no se carga mientras un cliente espera en línea.
+
+La medición separa **carga inicial** de **generación**. Las llamadas excluyen la
+carga inicial porque mantienen `tts_workers` instancias precargadas. La
+recomendación se calcula con el mismo texto en la máquina que ejecuta Blaster:
+
+- **Recomendada:** genera en hasta 3 segundos y usa como máximo 0.5 veces la
+  duración del audio producido.
+- **Utilizable con carga moderada:** genera en hasta 6 segundos y no tarda más
+  que el propio audio.
+- **No recomendada:** supera alguno de esos límites.
+
+La prueba representa una generación individual. Para campañas simultáneas,
+mantén `tts_workers` acorde con la concurrencia y valida carga antes de operar.
+La vista previa de campaña utiliza el mismo modelo activo que las llamadas.
+
+Kokoro puede instalarse como una opción comercial aislada. Sus tres voces en
+español aparecen en el mismo comparador y Piper permanece disponible para volver
+atrás. Consulta [Evaluación de Kokoro](kokoro-experiment.md) para instalarlo,
+medirlo y retirarlo.
 
 ## Una troncal SIP
 
@@ -130,8 +152,8 @@ Ejemplo de dos perfiles; los parámetros globales siguen al principio del TOML:
 
 ```toml
 routing = "priority"
-concurrency = 3
-trunk_channels = 10
+concurrency = 20
+trunk_channels = 40
 calls_per_second = 1.0
 
 [[trunks]]
@@ -202,9 +224,10 @@ aplica las direcciones y rangos que correspondan a tu proveedor.
 - `[auth]`: sesiones y administrador inicial. El bootstrap sólo crea una cuenta
   cuando la base no tiene usuarios. Las claves posteriores de usuarios se guardan
   como hashes en SQLite; las claves SIP permanecen en TOML.
-- `[amd]`: perfil acústico; consulta [AMD](amd.md). El ejemplo está activado y
-  cuelga los resultados inciertos. Una configuración antigua sin sección AMD
-  conserva la detección desactivada.
+- `[amd]`: perfil acústico y captura temporal para calibración; consulta
+  [AMD](amd.md). El ejemplo está activado, cuelga los resultados inciertos y
+  conserva desactivada la captura hasta que el operador decida reunir muestras.
+  Una configuración antigua sin sección AMD conserva la detección desactivada.
 - `[recordings]`: activación, retención, espacio máximo y espacio libre mínimo.
 - `[automation]`: sondeo de agenda, margen de retraso, umbrales de alertas y
   retención de reportes. Véase [uso del panel](usage.md).

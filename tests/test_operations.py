@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -106,6 +107,8 @@ async def test_failover_persists_attempts_and_does_not_retry_busy(tmp_path):
         await until(lambda: engine.active_campaign is None)
         job = store.jobs(cid)[0]
         assert job["status"] == "no_input", job
+        assert job["customer_trunk_id"] == "b"
+        assert job["customer_trunk_name"] == "Reparto"
         legs = store.db.execute("SELECT * FROM call_legs").fetchall()
         assert len(legs) == 2 and [r["trunk_id"] for r in legs] == ["a", "b"]
         assert legs[0]["role"].startswith("customer_attempt_")
@@ -113,6 +116,8 @@ async def test_failover_persists_attempts_and_does_not_retry_busy(tmp_path):
         rows, _, _ = Analytics(tmp_path / "db").report_data(Filters(mode="simulation"), 100)
         assert len(rows) == 1 and len(rows[0]["_legs"]) == 2
         assert rows[0]["customer_trunk_id"] == "b"
+        assert rows[0]["customer_trunk_name"] == "Reparto"
+        assert [leg["trunk_name"] for leg in rows[0]["_legs"]] == ["Principal", "Reparto"]
         assert rows[0]["end_actor"] == "system"  # final policy, not the failed first trunk
     finally:
         await engine.close()
@@ -149,6 +154,9 @@ async def test_schedule_dispatch_report_once_alerts_and_recording(engine):
     await until(lambda: not engine.sessions)
     record = dict(ops.db.execute("SELECT * FROM recordings WHERE job_id=?", (jid,)).fetchone())
     assert record["status"] == "ready" and record["evidence"] == "dtmf_interaction"
+    assert re.fullmatch(
+        r"CRED-000_525550000100_\d{8}_\d{6}_\d{3}\.ogg", record["filename"]
+    )
     assert (engine.recordings.directory / record["filename"]).read_bytes().startswith(b"OggS")
     assert not list(engine.recordings.directory.glob("*.wav"))
     with ops.db:

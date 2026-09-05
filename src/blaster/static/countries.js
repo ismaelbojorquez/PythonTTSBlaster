@@ -1,33 +1,41 @@
+import { getLanguage, locale, t, translateText } from "./i18n.js";
+
 const $ = selector => document.querySelector(selector);
 let regions = [{code:"MX", calling_code:"52", example:"55 1234 5678"}];
 let loaded = false;
-const names = typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames(["es"], {type:"region"}) : null;
-export const countryLabel = code => names?.of(code) || code;
+const displayNames = () => typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames([locale()], {type:"region"}) : null;
+export const countryLabel = code => displayNames()?.of(code) || code;
 export const countryOptions = () => regions.map(r => [r.code, `${countryLabel(r.code)} (+${r.calling_code})`]);
+export const countryExample = code => regions.find(region => region.code === code)?.example || "";
 
 function updateHints() {
   const region = regions.find(r => r.code === $("#country").value);
   const agent = regions.find(r => r.code === ($("#agent-country").value || region.code));
   const example = region.example.replace(/\D/g, "");
-  $("#country-help").textContent = `Escribe los contactos sin el prefijo +${region.calling_code}. Se agregará automáticamente al marcar.`;
-  $("#contacts").placeholder = `Credito,Telefono,nombre,fecha\nCRED-001,${example},Ana,viernes 12 de septiembre`;
+  $("#country-help").textContent = translateText(`Escribe los contactos sin el código +${region.calling_code}. Se agregará automáticamente al marcar.`);
+  $("#contacts").placeholder = getLanguage() === "en"
+    ? `Account,Phone,name,date\nACC-001,${example},Ana,Friday September 12`
+    : `Credito,Telefono,nombre,fecha\nCRED-001,${example},Ana,viernes 12 de septiembre`;
   $("#agent-number").placeholder = agent.example;
-  $("#agent-help").textContent = `Un número nacional por línea, sin +${agent.calling_code}. Puedes usar un solo teléfono o hasta 50.`;
+  $("#agent-help").textContent = translateText(`Un número nacional por línea, sin +${agent.calling_code}. Puedes usar un solo teléfono o hasta 50.`);
 }
 
 export async function loadCountries(api) {
   if(loaded) return;
   const data = await api("/api/countries");
-  regions = data.sort((a,b) => countryLabel(a.code).localeCompare(countryLabel(b.code), "es"));
-  for(const id of ["#country", "#agent-country"]) {
-    const select = $(id), value = select.value;
+  regions = data.sort((a,b) => countryLabel(a.code).localeCompare(countryLabel(b.code), locale()));
+  for(const id of ["#country", "#agent-country", "#traceability-country"]) {
+    const select = $(id);
+    if(!select) continue;
+    const value = select.value;
     select.replaceChildren();
-    if(id === "#agent-country") select.add(new Option("Mismo país que los contactos", ""));
-    for(const [code,label] of countryOptions()) select.add(new Option(label, code, id === "#country" && code === "MX"));
-    select.value = value;
+    if(id === "#agent-country") select.add(new Option(t("Mismo país que los contactos"), ""));
+    for(const [code,label] of countryOptions()) select.add(new Option(label, code, id !== "#agent-country" && code === "MX"));
+    select.value = value || (id === "#agent-country" ? "" : "MX");
   }
   loaded = true;
   updateHints();
+  document.dispatchEvent(new CustomEvent("countries:loaded"));
 }
 
 export function applyTemplateAgent(template) {
@@ -43,7 +51,7 @@ export function applyTemplateAgent(template) {
 export function installCountryFields() {
   const invalidate = () => {
     updateHints();
-    $("#message-preview").textContent = "Revisa o escucha el mensaje con el país seleccionado.";
+    $("#message-preview").textContent = t("Revisa o escucha el mensaje con el país seleccionado.");
     $("#preview-result").textContent = "";
   };
   $("#country").addEventListener("change", invalidate);

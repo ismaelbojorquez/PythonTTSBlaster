@@ -1,8 +1,9 @@
-"""Local AMD using energy, timing and spectral tone purity. No ML or recordings.
+"""Local AMD using energy, timing and spectral tone purity, without ML.
 
 PCM contract: 8 kHz, mono, signed 16-bit native endian. The native conference
 bridge converts codecs/rates before delivering audio. Analysis runs outside its
-clock callback. This is a heuristic, not proof that the speaker is human.
+clock callback. Optional calibration stores only this bounded input. This is a
+heuristic, not proof that the speaker is human.
 """
 
 from __future__ import annotations
@@ -170,7 +171,9 @@ class Detector:
         return None
 
 
-async def detect(leg: Leg, settings: AMDSettings) -> AMDResult:
+async def detect(
+    leg: Leg, settings: AMDSettings, *, capture_pcm: bytearray | None = None
+) -> AMDResult:
     """Silently inspect only the answered customer's inbound audio, with a wall deadline."""
     detector = Detector(settings)
     loop = asyncio.get_running_loop()
@@ -182,6 +185,9 @@ async def detect(leg: Leg, settings: AMDSettings) -> AMDResult:
                 pcm = await stream.read()
                 if stream.error:
                     return detector.finish("unknown", stream.error)
+                if capture_pcm is not None:
+                    maximum = settings.total_analysis_ms * RATE * 2 // 1000
+                    capture_pcm.extend(pcm[: max(0, maximum - len(capture_pcm))])
                 result = detector.feed(pcm)
                 if result:
                     return result

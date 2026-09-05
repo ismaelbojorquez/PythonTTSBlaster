@@ -44,6 +44,23 @@ def international_number(value: str, country: str) -> str:
     return pn.format_number(number, pn.PhoneNumberFormat.E164).removeprefix("+")
 
 
+def history_phone_number(value: str, country: str = "MX") -> str:
+    """Return the exact stored number for a national or explicit international search."""
+    region = country_code(country)
+    compact = re.sub(r"[\s().-]", "", value.strip())
+    if compact.startswith("+"):
+        if not re.fullmatch(r"\+[0-9]{3,20}", compact):
+            raise ValueError("Escribe un teléfono con dígitos, sin extensiones ni letras")
+        try:
+            number = pn.parse(compact, None)
+        except pn.NumberParseException as error:
+            raise ValueError("Revisa el número internacional") from error
+        if not pn.is_possible_number(number):
+            raise ValueError("Revisa la cantidad de dígitos del número internacional")
+        return pn.format_number(number, pn.PhoneNumberFormat.E164).removeprefix("+")
+    return international_number(compact, region)
+
+
 @lru_cache(maxsize=1)
 def countries() -> list[dict]:
     result = []

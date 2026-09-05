@@ -1,3 +1,5 @@
+import { locale, t, translateText } from "./i18n.js";
+
 const $ = selector => document.querySelector(selector);
 let status = null, zoneReady = false;
 
@@ -36,19 +38,19 @@ function update() {
     $(id).required = scheduled;
   }
   const simulation = status?.mode !== "sip";
-  $("#campaign-submit").textContent = choice === "draft" ? "Guardar borrador" : scheduled ? "Programar campaña" : simulation ? "Crear e iniciar simulación" : "Crear e iniciar llamadas";
-  $("#execution-help").textContent = choice === "draft"
+  $("#campaign-submit").textContent = t(choice === "draft" ? "Guardar borrador" : scheduled ? "Programar campaña" : simulation ? "Crear e iniciar prueba" : "Crear e iniciar llamadas");
+  $("#execution-help").textContent = t(choice === "draft"
     ? "Se guardará sin llamar. Podrás iniciarla desde su panel cuando estés listo."
     : scheduled ? "La campaña se guardará y comenzará en la fecha y hora elegidas."
-    : simulation ? "Al guardar comenzará la simulación con estos contactos."
-    : "Al guardar comenzarán las llamadas a estos contactos por la troncal SIP.";
-  $("#execution-warning").textContent = scheduled && status?.automation_enabled === false
+    : simulation ? "Al guardar comenzará la prueba con estos contactos."
+    : "Al guardar comenzarán las llamadas con el proveedor disponible.");
+  $("#execution-warning").textContent = t(scheduled && status?.automation_enabled === false
     ? "Las tareas programadas están desactivadas. Actívalas en Configuración antes de programar."
     : choice === "now" && status?.active_campaign
     ? "Hay otra campaña en curso. Termínala o detenla antes de iniciar esta; también puedes guardarla como borrador o programarla."
     : choice === "now" && status && !status.ready
-    ? "La troncal aún no está lista. Puedes guardar el borrador o programar la campaña."
-    : "";
+    ? "El proveedor aún no está disponible. Puedes guardar el borrador o programar la campaña."
+    : "");
 }
 
 export function installCampaignExecution() {
@@ -62,6 +64,6 @@ export function installCampaignExecution() {
 
 export function scheduleDescription(schedule) {
   if (!schedule) return "";
-  const date = new Intl.DateTimeFormat("es-MX", {timeZone:schedule.timezone, dateStyle:"long", timeStyle:"short"}).format(new Date(schedule.due_at));
-  return `Programada para el ${date} · ${schedule.timezone}. Mantén la aplicación abierta y el equipo encendido.`;
+  const date = new Intl.DateTimeFormat(locale(), {timeZone:schedule.timezone, dateStyle:"long", timeStyle:"short"}).format(new Date(schedule.due_at));
+  return translateText(`Programada para el ${date} · ${schedule.timezone}. Mantén la aplicación abierta y el equipo encendido.`);
 }

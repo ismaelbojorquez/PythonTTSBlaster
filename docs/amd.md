@@ -2,7 +2,7 @@
 
 El detector utiliza reglas acústicas en Python/NumPy, integradas con el audio entrante
 de PJSUA2. No usa modelos entrenados, reconocimiento de palabras, servicios web,
-Asterisk ni FreeSWITCH. El TTS usa Piper, un modelo neuronal local; AMD no utiliza modelos de IA.
+Asterisk ni FreeSWITCH. El TTS usa la voz local seleccionada; AMD no utiliza modelos de IA.
 
 ## Criterios de diseño
 
@@ -39,8 +39,8 @@ el filtro; no se detectará un pitido que llegue después de decidir humano.
 Los estados del panel son **Detectando voz**, **Buzón probable** y **AMD incierto**.
 El historial conserva resultado, causa, duración y número de segmentos. El buzón
 probable cuelga, libera canales y aparece en el CSV con su detalle. Con el perfil
-recomendado, una decisión incierta continúa al mensaje para evitar cortar personas;
-el historial conserva la decisión aunque el estado final cambie.
+recomendado, una decisión incierta también termina antes del TTS; el historial
+conserva la decisión y permite programar un reintento independiente.
 El evento `amd` del CDR conserva además la versión del detector y todos los
 parámetros usados en esa llamada, para comparar perfiles sin reconstruir la
 configuración posteriormente. Los registros previos mantienen sus datos originales.
@@ -54,9 +54,9 @@ su precisión real debe medirse con saludos etiquetados de la instalación:
 | Parámetro | Valor | Efecto |
 |---|---:|---|
 | `enabled` | `true` | Activa AMD antes del TTS. |
-| `unknown_action` | `"continue"` | Sólo cuelga con evidencia de buzón; una decisión incierta continúa al mensaje. |
-| `total_analysis_ms` | 5000 | Límite máximo estricto; termina antes si hay evidencia suficiente. |
-| `initial_silence_ms` | 3500 | Espera inicial; sin saludo válido: incierto. |
+| `unknown_action` | `"hangup"` | Una decisión incierta termina antes del TTS y queda registrada para reintento. |
+| `total_analysis_ms` | 6500 | Límite máximo estricto; termina antes si hay evidencia suficiente. |
+| `initial_silence_ms` | 5000 | Espera un saludo tardío; sin saludo válido: incierto. |
 | `after_greeting_silence_ms` | 1400 | Espera más ante pausas internas de un buzón. |
 | `greeting_speech_ms` | 3200 | Voz válida acumulada que dispara buzón probable; da margen a saludos humanos largos. |
 | `minimum_word_ms` | 140 | Duración mínima del segmento; las ráfagas más cortas no se suman. |
@@ -69,6 +69,9 @@ su precisión real debe medirse con saludos etiquetados de la instalación:
 | `beep_min_hz` / `beep_max_hz` | 600 / 2000 | Banda de tonos examinada. |
 | `beep_purity` | 0.92 | Concentración espectral mínima en torno a una frecuencia. |
 | `beep_frequency_tolerance_hz` | 35 | Variación máxima respecto de la frecuencia inicial del tono. |
+| `calibration_capture_enabled` | `false` | Guarda temporalmente el audio usado por AMD para revisión humana. |
+| `calibration_retention_days` | 14 | Elimina muestras que superen este plazo. |
+| `calibration_max_samples` | 500 | Conserva como máximo esta cantidad; elimina primero las ya etiquetadas. |
 
 Se procesan tramas de 20 ms; las comparaciones se redondean efectivamente a esa
 resolución. El pitido usa ventanas Hann de 40 ms, FFT y energía de tres bins
@@ -82,7 +85,7 @@ acumular 3200 ms de voz válida. Los pitidos de menor duración pueden quedar
 inciertos; un humano con menos de 200 ms de voz también. Aumentar los márgenes
 alarga parte de las llamadas a buzones y la espera antes del TTS. Son consecuencias
 de los umbrales, no tiempos garantizados para la red real.
-Ninguna clasificación mantiene el análisis abierto más de 5 segundos desde que
+Ninguna clasificación mantiene el análisis abierto más de 6.5 segundos desde que
 comienza la captura, aunque la señal no permita decidir antes.
 El reloj de análisis empieza al abrir la captura; la señalización y el cierre SIP
 tienen sus propios tiempos. Durante un hueco RTP PJMEDIA puede entregar silencio
@@ -147,6 +150,29 @@ cancelación. Una prueba SIP nativa envía tres flujos PCMU por localhost, verif
 sus tres resultados y que sólo el saludo humano provoca TTS. Otra comprueba que,
 tras liberar la captura, siguen funcionando reproducción, DTMF y puente.
 
+### Captura temporal y etiquetado desde el panel
+
+Activa `calibration_capture_enabled = true` mientras reúnes evidencia. En cada
+llamada contestada se guarda un WAV PCM16 mono a 8000 Hz con el audio que alcanzó
+a escuchar el detector, nunca más de `total_analysis_ms`. La captura termina en
+cuanto AMD decide y no incluye el TTS, las opciones DTMF ni la conversación con
+el agente.
+
+En **Operación → Calibración AMD** puedes escuchar cada muestra y marcarla como
+**Es persona** o **Es buzón**. La bandeja muestra la decisión automática, su
+causa, voz detectada, segmentos, tiempo de análisis, campaña, Credito y Telefono.
+El filtro **Diferencias** concentra los casos donde tu etiqueta no coincide con
+AMD. Escuchar, etiquetar y eliminar queda en la auditoría.
+
+Los archivos están en `data/amd-calibration/` con permisos privados. Se eliminan
+automáticamente por antigüedad y cantidad, y el panel permite borrar una muestra
+o todas. Esa eliminación conserva CDR, resultado AMD y trazabilidad de la llamada.
+Las etiquetas sirven para medir y ajustar reglas posteriormente; no entrenan ni
+modifican el detector de forma automática.
+
+Cuando termines de reunir casos, desactiva la captura. Las muestras existentes
+siguen sujetas a retención hasta que las elimines desde el panel.
+
 ### Comparar perfiles con muestras etiquetadas
 
 Cuando tengas saludos de personas y buzones, prepara un CSV `muestras.csv`:
@@ -161,7 +187,7 @@ Los WAV deben ser PCM16 mono a 8000 Hz, exclusivamente del audio **entrante desd
 que se abre la captura AMD**, incluidas las pausas. Las rutas son relativas al CSV.
 Las grabaciones normales de la aplicación empiezan **después** de decidir AMD y
 mezclan TTS/contacto/agente: no sirven para validar el saludo que tomó esa decisión.
-No se activa una captura adicional ni se guardan saludos automáticamente.
+Exporta las muestras temporales del panel si quieres compararlas con esta herramienta.
 
 ```bash
 .venv/bin/python scripts/check_amd.py --config config.toml \
@@ -190,5 +216,6 @@ la implementación de Blaster sigue siendo local y no utiliza ese servicio.
 entrega tramas a una cola acotada: como máximo un segundo de PCM por llamada.
 El callback nativo sólo copia muestras; NumPy analiza fuera del reloj de medios.
 Un desbordamiento produce incierto para no clasificar audio incompleto como humano.
-No se guardan WAV de entrada ni se envían muestras a otro servicio. La captura se
-desconecta al decidir, al colgar, al detener campaña o al cerrar el motor.
+El audio nunca se envía a otro servicio. Los WAV sólo se guardan si habilitas la
+calibración temporal; la captura se desconecta al decidir, al colgar, al detener
+campaña o al cerrar el motor.
